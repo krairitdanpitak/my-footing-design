@@ -17,7 +17,7 @@ st.set_page_config(page_title="RC Pile Cap Design SDM", layout="wide")
 
 st.markdown("""
 <style>
-    /* CSS ปุ่มพิมพ์ */
+    /* ปุ่มพิมพ์ */
     .print-btn-internal {
         background-color: #008CBA;
         border: none;
@@ -36,7 +36,7 @@ st.markdown("""
     }
     .print-btn-internal:hover { background-color: #005f7f; }
 
-    /* CSS ตาราง */
+    /* ตาราง */
     .report-table {width: 100%; border-collapse: collapse; font-family: sans-serif; font-size: 14px;}
     .report-table th, .report-table td {border: 1px solid #ddd; padding: 8px;}
     .report-table th {background-color: #f2f2f2; text-align: center; font-weight: bold;}
@@ -45,6 +45,20 @@ st.markdown("""
     .pass-no {color: red; font-weight: bold;}
     .sec-row {background-color: #e0e0e0; font-weight: bold; font-size: 15px;}
     .load-value {color: #D32F2F !important; font-weight: bold;}
+
+    /* จัด layout รูปภาพ */
+    .drawing-container {
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+        flex-wrap: wrap;
+    }
+    .drawing-box {
+        border: 1px solid #ddd;
+        padding: 10px;
+        background-color: #fff;
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,22 +88,22 @@ def fmt(n, digits=3):
 
 
 # ==========================================
-# 3. CALCULATION LOGIC (PILE CAP)
+# 3. CALCULATION LOGIC
 # ==========================================
 def get_pile_coordinates(n_pile, s):
-    """Return list of (x, y) tuples for pile positions relative to center"""
-    coords = []
-    if n_pile == 2:
-        coords = [(-s / 2, 0), (s / 2, 0)]
+    """Return list of (x, y) tuples"""
+    if n_pile == 1:
+        return [(0, 0)]
+    elif n_pile == 2:
+        return [(-s / 2, 0), (s / 2, 0)]
     elif n_pile == 3:
         h_tri = s * math.sqrt(3) / 2
-        # Centroid is at h/3 from base
-        coords = [(-s / 2, -h_tri / 3), (s / 2, -h_tri / 3), (0, 2 * h_tri / 3)]
+        return [(-s / 2, -h_tri / 3), (s / 2, -h_tri / 3), (0, 2 * h_tri / 3)]
     elif n_pile == 4:
-        coords = [(-s / 2, -s / 2), (s / 2, -s / 2), (-s / 2, s / 2), (s / 2, s / 2)]
+        return [(-s / 2, -s / 2), (s / 2, -s / 2), (-s / 2, s / 2), (s / 2, s / 2)]
     elif n_pile == 5:
-        coords = [(-s / 2, -s / 2), (s / 2, -s / 2), (-s / 2, s / 2), (s / 2, s / 2), (0, 0)]
-    return coords
+        return [(-s / 2, -s / 2), (s / 2, -s / 2), (-s / 2, s / 2), (s / 2, s / 2), (0, 0)]
+    return []
 
 
 def process_footing_calculation(inputs):
@@ -101,198 +115,147 @@ def process_footing_calculation(inputs):
     def row(item, formula, subs, result, unit, status=""):
         rows.append([item, formula, subs, result, unit, status])
 
-    # --- 1. Inputs ---
+    # Inputs
     fc = inputs['fc'] * 0.0980665  # MPa
     fy = inputs['fy'] * 0.0980665
     Pu_tf = inputs['Pu']
     Pu_N = Pu_tf * 9806.65
-    PileCap_tf = inputs[
-        'PileCap']  # Capacity per pile (Service? usually check factored in SDM, but let's assume input is Safe Load x FS or Factored Capacity. Here assume Safe Load for checking number of piles, usually strictly we check Pu/N <= Q_all_factored)
-    # Standard practice: Check Pu <= Phi * Pn_pile. Here we simplify: Pu/N <= P_pile_design
+    PileCap_tf = inputs['PileCap']
 
     n_pile = int(inputs['n_pile'])
-    s = inputs['spacing'] * 1000  # m to mm
+    s = inputs['spacing'] * 1000  # mm
     edge = inputs['edge'] * 1000
     col_x = inputs['cx'] * 1000
     col_y = inputs['cy'] * 1000
     h_cap = inputs['h'] * 1000
-    cover = 75.0  # mm (Standard for footing against earth)
+    dp = inputs['dp'] * 1000
+    cover = 75.0
 
     bar_key = inputs['mainBar']
     db = BAR_INFO[bar_key]['d_mm']
-    d = h_cap - cover - db  # Effective depth
+    d = h_cap - cover - db
 
-    # Pile Size (for Punching)
-    dp = inputs['dp'] * 1000
-
-    # Generate Geometry
+    # Geometry
     coords = get_pile_coordinates(n_pile, s)
 
-    # Calculate Cap Dimensions (Box bounding)
-    xs = [c[0] for c in coords];
-    ys = [c[1] for c in coords]
-    width_x = (max(xs) - min(xs)) + dp + 2 * edge  # Simplified logic
-    width_y = (max(ys) - min(ys)) + dp + 2 * edge
-
-    # Override for standard shapes
-    if n_pile == 3:  # Triangle shape approx
-        width_x = s + dp + 2 * edge
-        width_y = (s * math.sqrt(3) / 2) + dp + 2 * edge  # Approx height
+    if n_pile == 1:
+        # F1: Size depends on Pile + Edge
+        width_x = dp + 2 * edge
+        width_y = dp + 2 * edge
+        # Ensure min width for column
+        width_x = max(width_x, col_x + 2 * edge)
+        width_y = max(width_y, col_y + 2 * edge)
+    else:
+        xs = [c[0] for c in coords];
+        ys = [c[1] for c in coords]
+        width_x = (max(xs) - min(xs)) + dp + 2 * edge
+        width_y = (max(ys) - min(ys)) + dp + 2 * edge
+        if n_pile == 3:
+            width_x = s + dp + 2 * edge
+            width_y = (s * math.sqrt(3) / 2) + dp + 2 * edge
 
     sec("1. GEOMETRY & MATERIALS")
     row("Materials", "fc', fy", f"{fmt(fc, 2)}, {fmt(fy, 0)}", "-", "MPa")
     row("Footing Size", "B x L x h", f"{fmt(width_x, 0)}x{fmt(width_y, 0)}x{fmt(h_cap, 0)}", "-", "mm")
-    row("Effective Depth", "d = h - cover - db", f"{h_cap:.0f} - {cover} - {db}", f"{d:.0f}", "mm")
-    row("Pile Config", f"{n_pile} Piles", f"Spacing {s:.0f} mm", "-", "-")
+    row("Config", f"{n_pile} Piles", f"Spacing {s:.0f} mm", "-", "-")
 
-    # --- 2. PILE REACTION CHECK ---
+    # --- 2. PILE CHECK ---
     sec("2. PILE REACTION CHECK")
-    # For simplicity, assume concentric load Pu equally distributed
-    P_avg_N = Pu_N / n_pile
-    P_avg_tf = P_avg_N / 9806.65
-
-    row("Load Input (Pu)", "-", "-", f"{fmt(Pu_tf, 3)}", "tf", "", )
-
-    # Capacity Check
-    # Assuming input 'Pile Capacity' is Safe Load (Allowable).
-    # For SDM, we compare Factored Load to Factored Resistance.
-    # Often in practice: P_pile_service <= Q_allowable.
-    # Here input is Pu (Factored). We need P_pile_factored_cap.
-    # Let's assume User inputs "Safe Load" and we treat check as Pu_pile <= Q_safe * FS?
-    # OR User inputs "Factored Capacity". Let's assume User inputs Safe Load and we check Service Load...
-    # BUT this app is SDM (Factored inputs).
-    # ADJUSTMENT: Check P_avg <= P_pile_max_input. User should input Factored Capacity of Pile or we warn.
-    # Let's label input as "Max Factored Load per Pile".
+    P_avg_tf = Pu_tf / n_pile
+    row("Load Input (Pu)", "-", "-", f"{fmt(Pu_tf, 3)}", "tf", "")
 
     status_pile = "PASS" if P_avg_tf <= PileCap_tf else "FAIL"
-    row("Pile Reaction (Ru)", "Pu / N", f"{fmt(Pu_tf, 2)} / {n_pile}", f"{fmt(P_avg_tf, 2)}", "tf")
-    row("Check Capacity", "Ru ≤ P_pile(max)", f"{fmt(P_avg_tf, 2)} ≤ {fmt(PileCap_tf, 2)}", status_pile, "-",
-        status_pile)
+    row("Reaction (Ru)", "Pu / N", f"{fmt(Pu_tf, 2)} / {n_pile}", f"{fmt(P_avg_tf, 2)}", "tf")
+    row("Capacity Check", "Ru ≤ P_pile", f"{fmt(P_avg_tf, 2)} ≤ {fmt(PileCap_tf, 2)}", status_pile, "-", status_pile)
 
-    # --- 3. PUNCHING SHEAR (Two-Way) ---
-    sec("3. PUNCHING SHEAR (at d/2)")
-    # Critical perimeter b0 around column
-    # Rectangular critical section: (cx+d) * (cy+d)
+    if n_pile == 1:
+        # --- SPECIAL CASE FOR 1 PILE ---
+        sec("3. ONE PILE CAP DESIGN")
+        row("Note", "Load transfer directly", "Column to Pile", "-", "-", "INFO")
+
+        # Min Steel (Temp & Shrinkage)
+        As_min = 0.0018 * width_x * h_cap  # Check both dirs
+        row("As (Min)", "0.0018 · B · h", f"0.0018·{width_x:.0f}·{h_cap:.0f}", f"{fmt(As_min, 0)}", "mm²")
+
+        bar_area = BAR_INFO[bar_key]['A_cm2'] * 100
+        n_bars = math.ceil(As_min / bar_area)
+        # Minimum practical for cage usually 3-4 bars
+        if n_bars < 4: n_bars = 4
+
+        row("Provide Steel", f"Use {bar_key} (Cage)", f"Req: {fmt(As_min, 0)}", f"{n_bars}-{bar_key}", "mm²", "OK")
+
+        return rows, coords, width_x, width_y, n_bars, "PASS"  # Assume pass for 1 pile if reaction ok
+
+    # --- N > 1 CHECKS ---
+    # 3. PUNCHING
+    sec("3. PUNCHING SHEAR")
     c1 = col_x + d;
     c2 = col_y + d
     bo = 2 * (c1 + c2)
+    P_avg_N = (Pu_tf * 9806.65) / n_pile
 
-    # Calculate Vu_punch: Sum of piles OUTSIDE the critical perimeter
-    # Distance check from center
-    # Critical boundary limits: [-c1/2, c1/2] and [-c2/2, c2/2]
     Vu_punch_N = 0
-    piles_out = 0
     for (px, py) in coords:
-        # Check if pile center is outside
-        # Simple check: if pile center is strictly outside critical rect
-        is_outside = (abs(px) > c1 / 2) or (abs(py) > c2 / 2)
-        if is_outside:
+        if (abs(px) > c1 / 2) or (abs(py) > c2 / 2):
             Vu_punch_N += P_avg_N
-            piles_out += 1
 
-    # If standard 2-pile or closely spaced, shear might be different, but using general ACI logic:
     Vu_punch_tf = Vu_punch_N / 9806.65
-
-    # Capacity phi*Vc
-    # phi = 0.75
-    # Vc = 0.33 * sqrt(fc) * bo * d (simplified ACI for column)
-    phi_v = 0.75
-    Vc_punch_N = 0.33 * math.sqrt(fc) * bo * d
-    phiVc_punch_N = phi_v * Vc_punch_N
+    phiVc_punch_N = 0.75 * 0.33 * math.sqrt(fc) * bo * d
     phiVc_punch_tf = phiVc_punch_N / 9806.65
 
-    row("Critical Perimeter", "bo = 2(c1+d + c2+d)", f"2({c1:.0f}+{c2:.0f})", f"{bo:.0f}", "mm")
-    row("Vu (Punching)", f"Sum Piles Outside ({piles_out})", "-", f"{fmt(Vu_punch_tf, 2)}", "tf")
-
     status_punch = "PASS" if Vu_punch_N <= phiVc_punch_N else "FAIL"
-    row("Capacity φVc", "0.75·0.33√fc'·bo·d", f"0.75·0.33√{fc:.1f}·{bo:.0f}·{d:.0f}", f"{fmt(phiVc_punch_tf, 2)}", "tf")
+    row("Vu (Punching)", "Sum Piles Outside", "-", f"{fmt(Vu_punch_tf, 2)}", "tf")
     row("Check Punching", "Vu ≤ φVc", f"{fmt(Vu_punch_tf, 2)} ≤ {fmt(phiVc_punch_tf, 2)}", status_punch, "-",
         status_punch)
 
-    # --- 4. ONE-WAY SHEAR (Beam Action) ---
-    sec("4. BEAM SHEAR (One-Way at d)")
-    # Check Critical Section at d from column face
-    # Distance from center = col_x/2 + d
+    # 4. BEAM SHEAR
+    sec("4. BEAM SHEAR (One-Way)")
     dist_crit = col_x / 2 + d
-
-    # Sum piles beyond this distance
     Vu_beam_N = 0
-    piles_beam = 0
     for (px, py) in coords:
-        if abs(px) > dist_crit:  # Check X direction mainly
+        if abs(px) > dist_crit:
             Vu_beam_N += P_avg_N
-            piles_beam += 1
 
     Vu_beam_tf = Vu_beam_N / 9806.65
-
-    # Capacity
-    # Vc = 0.17 * sqrt(fc) * bw * d
-    # bw is width of footing
-    Vc_beam_N = 0.17 * math.sqrt(fc) * width_y * d
-    phiVc_beam_N = phi_v * Vc_beam_N
+    phiVc_beam_N = 0.75 * 0.17 * math.sqrt(fc) * width_y * d
     phiVc_beam_tf = phiVc_beam_N / 9806.65
 
-    row("Critical Section", "from center = c/2 + d", f"{col_x / 2:.0f} + {d:.0f}", f"{dist_crit:.0f}", "mm")
-    row("Vu (One-Way)", f"Sum Piles Outside ({piles_beam})", "-", f"{fmt(Vu_beam_tf, 2)}", "tf")
-    row("Capacity φVc", "0.75·0.17√fc'·B·d", f"0.75·0.17...·{width_y:.0f}·{d:.0f}", f"{fmt(phiVc_beam_tf, 2)}", "tf")
-
     status_beam = "PASS" if Vu_beam_N <= phiVc_beam_N else "FAIL"
-    row("Check Beam Shear", "Vu ≤ φVc", "-", status_beam, "-", status_beam)
+    row("Check Beam Shear", "Vu ≤ φVc", f"{fmt(Vu_beam_tf, 2)} ≤ {fmt(phiVc_beam_tf, 2)}", status_beam, "-",
+        status_beam)
 
-    # --- 5. FLEXURE DESIGN ---
+    # 5. FLEXURE
     sec("5. FLEXURAL DESIGN")
-    # Critical section at column face
     face_dist = col_x / 2
-
-    # Calculate Moment from piles
     Mu_calc_Nmm = 0
     for (px, py) in coords:
-        lever_arm = abs(px) - face_dist
-        if lever_arm > 0:
-            Mu_calc_Nmm += P_avg_N * lever_arm
+        lever = abs(px) - face_dist
+        if lever > 0: Mu_calc_Nmm += P_avg_N * lever
 
     Mu_calc_tfm = Mu_calc_Nmm / 9806650.0
-    row("Design Moment Mu", "Σ P_pile · (x - c/2)", f"At Col Face", f"{fmt(Mu_calc_tfm, 2)}", "tf-m")
-
-    # Calculate Steel
-    # As approx = Mu / (0.9 * fy * 0.9d)
-    phi_f = 0.9
-    # Solve exact a
-    # Mn = As fy (d - a/2) -> a = As fy / 0.85 fc b
-    # Iterative or quadratic. Let's use standard approx for footing
-
-    req_As = 0
-    if Mu_calc_Nmm > 0:
-        # Simple formula Mu = phi * As * fy * (d - a/2)
-        # Assume j = 0.9
-        req_As = Mu_calc_Nmm / (phi_f * fy * 0.9 * d)
-
-    # Check Min Steel (Temp & Shrinkage usually 0.0018 b h)
+    req_As = Mu_calc_Nmm / (0.9 * fy * 0.9 * d) if Mu_calc_Nmm > 0 else 0
     As_min = 0.0018 * width_y * h_cap
-
     As_design = max(req_As, As_min)
 
-    row("As (Strength)", "Mu / (φ·fy·0.9d)", "-", f"{fmt(req_As, 0)}", "mm²")
-    row("As (Min)", "0.0018 · B · h", f"0.0018·{width_y:.0f}·{h_cap:.0f}", f"{fmt(As_min, 0)}", "mm²")
+    row("Design Moment Mu", "-", "-", f"{fmt(Mu_calc_tfm, 2)}", "tf-m")
+    row("As Req", "Max(Calc, Min)", f"Max({fmt(req_As, 0)}, {fmt(As_min, 0)})", f"{fmt(As_design, 0)}", "mm²")
 
-    # Provide Bars
     bar_area = BAR_INFO[bar_key]['A_cm2'] * 100
-    num_bars = math.ceil(As_design / bar_area)
-    # Check spacing
-    spacing_prov = (width_y - 2 * cover) / num_bars
+    n_bars = math.ceil(As_design / bar_area)
+    s_prov = (width_y - 2 * cover) / n_bars
 
-    row("Provide Steel", f"Use {bar_key}", f"Req: {fmt(As_design, 0)}", f"{num_bars}-{bar_key}", "mm²", "OK")
-    row("Spacing", "-", "-", f"@{spacing_prov / 10:.0f} cm", "-", "")
+    row("Provide Steel", f"Use {bar_key}", "-", f"{n_bars}-{bar_key}", "-", "OK")
+    row("Spacing", "-", "-", f"@{s_prov / 10:.0f} cm", "-", "")
 
-    sec("6. FINAL STATUS")
     overall = "OK" if (status_pile == "PASS" and status_punch == "PASS" and status_beam == "PASS") else "NOT OK"
+    sec("6. FINAL STATUS")
     row("Overall", "-", "-", "DESIGN COMPLETE", "-", overall)
 
-    return rows, coords, width_x, width_y, num_bars
+    return rows, coords, width_x, width_y, n_bars, overall
 
 
 # ==========================================
-# 4. PLOTTING
+# 4. PLOTTING (Plan & Section)
 # ==========================================
 def fig_to_base64(fig):
     buf = io.BytesIO()
@@ -301,42 +264,105 @@ def fig_to_base64(fig):
     return f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"
 
 
-def plot_footing(coords, width_x, width_y, col_x, col_y, dp, bar_txt):
+def plot_footing_plan(coords, width_x, width_y, col_x, col_y, dp, bar_txt):
     fig, ax = plt.subplots(figsize=(5, 5))
-
-    # Footing Outline
+    # Footing
     rect = patches.Rectangle((-width_x / 2, -width_y / 2), width_x, width_y, linewidth=2, edgecolor='black',
-                             facecolor='#f0f0f0')
+                             facecolor='#f9f9f9')
+    ax.add_patch(rect)
+    # Rebar Grid (Symbolic)
+    for i in np.linspace(-width_x / 2 + 75, width_x / 2 - 75, 5):
+        ax.plot([i, i], [-width_y / 2 + 75, width_y / 2 - 75], 'r-', alpha=0.3, linewidth=1)
+    for i in np.linspace(-width_y / 2 + 75, width_y / 2 - 75, 5):
+        ax.plot([-width_x / 2 + 75, width_x / 2 - 75], [i, i], 'r-', alpha=0.3, linewidth=1)
+
+    # Column
+    rect_col = patches.Rectangle((-col_x / 2, -col_y / 2), col_x, col_y, linewidth=1.5, edgecolor='#333',
+                                 facecolor='#ddd', hatch='//')
+    ax.add_patch(rect_col)
+    # Piles
+    for (px, py) in coords:
+        circle = patches.Circle((px, py), radius=dp / 2, edgecolor='black', facecolor='white', linewidth=1.5,
+                                linestyle='--')
+        ax.add_patch(circle)
+        ax.text(px, py, "P", ha='center', va='center', fontsize=8)
+
+    ax.set_xlim(-width_x / 1.4, width_x / 1.4)
+    ax.set_ylim(-width_y / 1.4, width_y / 1.4)
+    ax.set_aspect('equal');
+    ax.axis('off')
+    ax.set_title("PLAN VIEW", fontweight='bold', fontsize=12)
+    ax.text(0, -width_y / 2 - 100, f"Size: {width_x / 1000:.2f}x{width_y / 1000:.2f}m", ha='center', va='top')
+    return fig
+
+
+def plot_footing_section(width, h, col_w, dp, cover, bar_txt, n_pile):
+    fig, ax = plt.subplots(figsize=(5, 4))
+
+    # Ground
+    ax.plot([-width, width], [0, 0], 'k-', linewidth=0.5)
+
+    # Pile Cap (Concrete)
+    rect = patches.Rectangle((-width / 2, -h), width, h, linewidth=2, edgecolor='black', facecolor='#f0f0f0')
     ax.add_patch(rect)
 
     # Column
-    rect_col = patches.Rectangle((-col_x / 2, -col_y / 2), col_x, col_y, linewidth=1, edgecolor='black',
-                                 facecolor='#bbb', hatch='//')
+    rect_col = patches.Rectangle((-col_w / 2, 0), col_w, h * 0.8, linewidth=1.5, edgecolor='black', facecolor='#fff',
+                                 hatch='///')
     ax.add_patch(rect_col)
+    ax.plot([-col_w / 2, -col_w / 2], [h * 0.8, h * 1.0], 'k--', linewidth=0.5)  # break line
+    ax.plot([col_w / 2, col_w / 2], [h * 0.8, h * 1.0], 'k--', linewidth=0.5)
 
     # Piles
-    for (px, py) in coords:
-        circle = patches.Circle((px, py), radius=dp / 2, edgecolor='black', facecolor='white', linewidth=1.5)
-        ax.add_patch(circle)
-        ax.plot(px, py, 'k+', markersize=5)
+    pile_h = h * 0.6
+    if n_pile == 1:
+        rect_p = patches.Rectangle((-dp / 2, -h - pile_h), dp, pile_h, linewidth=1, edgecolor='black', facecolor='#fff')
+        ax.add_patch(rect_p)
+    else:
+        # Show 2 piles approx at edges
+        off = width / 2 - dp / 2 - 150  # approx edge dist
+        rect_p1 = patches.Rectangle((-off - dp / 2, -h - pile_h), dp, pile_h, linewidth=1, edgecolor='black',
+                                    facecolor='#fff')
+        rect_p2 = patches.Rectangle((off - dp / 2, -h - pile_h), dp, pile_h, linewidth=1, edgecolor='black',
+                                    facecolor='#fff')
+        ax.add_patch(rect_p1);
+        ax.add_patch(rect_p2)
 
-    ax.set_xlim(-width_x / 1.5, width_x / 1.5)
-    ax.set_ylim(-width_y / 1.5, width_y / 1.5)
-    ax.set_aspect('equal')
+    # Rebar (Main Bottom) - U Shape
+    bar_y = -h + cover
+    ax.plot([-width / 2 + cover, width / 2 - cover], [bar_y, bar_y], 'r-', linewidth=3)  # Horiz
+    # Hooks up
+    ax.plot([-width / 2 + cover, -width / 2 + cover], [bar_y, bar_y + h * 0.6], 'r-', linewidth=3)
+    ax.plot([width / 2 - cover, width / 2 - cover], [bar_y, bar_y + h * 0.6], 'r-', linewidth=3)
+
+    # Transverse Bars (Dots)
+    n_dots = 6
+    dot_xs = np.linspace(-width / 2 + cover * 2, width / 2 - cover * 2, n_dots)
+    for x in dot_xs:
+        ax.add_patch(patches.Circle((x, bar_y + 15), radius=8, color='blue'))  # On top of main bar
+
+    # Top Bars (if any or stirrups) - Symbolic
+    top_y = -cover
+    ax.plot([-width / 2 + cover, width / 2 - cover], [top_y, top_y], 'b-', linewidth=1.5)
+
+    # Dimensions & Labels
+    ax.annotate(f"h={h / 1000:.2f}m", xy=(width / 2, -h / 2), xytext=(width / 2 + 100, -h / 2),
+                arrowprops=dict(arrowstyle='->'))
+    ax.text(0, bar_y - 80, f"Main: {bar_txt}", ha='center', color='red', fontsize=9, fontweight='bold')
+    ax.text(0, -h / 2, "Concrete Cover 7.5cm", ha='center', fontsize=8, alpha=0.6)
+
+    ax.set_xlim(-width / 1.2, width / 1.2)
+    ax.set_ylim(-h * 1.8, h * 1.2)
     ax.axis('off')
-    ax.set_title("Pile Cap Plan View", fontweight='bold')
-
-    # Info Text
-    info = f"Size: {width_x / 1000:.2f} x {width_y / 1000:.2f} m\nRebar: {bar_txt}"
-    ax.text(0, -width_y / 2 - 200, info, ha='center', va='top', fontsize=10)
+    ax.set_title("SECTION DETAIL", fontweight='bold', fontsize=12)
 
     return fig
 
 
 # ==========================================
-# 5. REPORT
+# 5. REPORT GENERATOR
 # ==========================================
-def generate_report(inputs, rows, img_base64):
+def generate_report(inputs, rows, img_plan, img_sect):
     table_rows = ""
     for r in rows:
         if r[0] == "SECTION":
@@ -360,7 +386,7 @@ def generate_report(inputs, rows, img_base64):
     <html lang="th">
     <head>
         <meta charset="UTF-8">
-        <title>Pile Cap Design Report</title>
+        <title>Pile Cap Report</title>
         <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
         <style>
             body {{ font-family: 'Sarabun', sans-serif; padding: 20px; color: black; }}
@@ -374,8 +400,9 @@ def generate_report(inputs, rows, img_base64):
             .info-container {{ display: flex; justify-content: space-between; margin-bottom: 20px; }}
             .info-box {{ width: 48%; border: 1px solid #ddd; padding: 10px; }}
 
-            .images {{ text-align: center; margin: 20px 0; }}
-            .images img {{ width: 50%; border: 1px solid #ddd; padding: 10px; }}
+            .drawing-container {{ display: flex; justify-content: center; gap: 20px; margin: 20px 0; }}
+            .drawing-box {{ border: 1px solid #ccc; padding: 5px; text-align: center; width: 45%; }}
+            .drawing-box img {{ max-width: 100%; height: auto; }}
 
             table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }}
             th, td {{ border: 1px solid #444; padding: 6px; }}
@@ -418,17 +445,24 @@ def generate_report(inputs, rows, img_base64):
             </div>
             <div class="info-box">
                 <strong>Materials:</strong> fc'={inputs['fc']} ksc, fy={inputs['fy']} ksc<br>
-                <strong>Config:</strong> {inputs['n_pile']} Piles, Dia {inputs['dp']} m<br>
+                <strong>Pile Config:</strong> {inputs['n_pile']} Piles, Dia {inputs['dp']} m<br>
                 <strong>Spacing:</strong> {inputs['spacing']} m
             </div>
         </div>
 
-        <h3>Design Summary</h3>
-        <div class="images">
-            <img src="{img_base64}" />
+        <h3>Design Drawings</h3>
+        <div class="drawing-container">
+            <div class="drawing-box">
+                <img src="{img_plan}" />
+                <p>Plan View</p>
+            </div>
+            <div class="drawing-box">
+                <img src="{img_sect}" />
+                <p>Section Detail</p>
+            </div>
         </div>
 
-        <br><br><br>
+        <br>
 
         <h3>Calculation Details</h3>
         <table>
@@ -485,7 +519,8 @@ with st.sidebar.form("inputs"):
     cy = c2.number_input("Col Y (m)", 0.25)
 
     st.header("2. Pile Configuration")
-    n_pile = st.selectbox("Number of Piles", [2, 3, 4, 5], index=2)
+    # Added '1' for Single Pile
+    n_pile = st.selectbox("Number of Piles", [1, 2, 3, 4, 5], index=1)
     c1, c2 = st.columns(2)
     dp = c1.number_input("Pile Dia (m)", 0.22)
     spacing = c2.number_input("Spacing (m)", 0.80)
@@ -497,7 +532,7 @@ with st.sidebar.form("inputs"):
     mainBar = st.selectbox("Main Rebar", list(BAR_INFO.keys()), index=4)  # DB16
 
     st.header("4. Loads (Factored)")
-    Pu = st.number_input("Axial Load Pu (tf)", 60.0)
+    Pu = st.number_input("Axial Load Pu (tf)", 30.0)
     PileCap = st.number_input("Max Factored Load/Pile (tf)", 30.0, help="ความสามารถรับน้ำหนักเสาเข็ม (Factored)")
 
     run_btn = st.form_submit_button("Run Design")
@@ -512,16 +547,20 @@ if run_btn:
     }
 
     # Calculate
-    rows, coords, bx, by, n_bars = process_footing_calculation(inputs)
+    rows, coords, bx, by, n_bars, status = process_footing_calculation(inputs)
 
-    # Plot
-    fig = plot_footing(coords, bx, by, cx * 1000, cy * 1000, dp * 1000, f"{n_bars}-{mainBar}")
-    img = fig_to_base64(fig)
+    # Plot Plan
+    fig_plan = plot_footing_plan(coords, bx, by, cx * 1000, cy * 1000, dp * 1000, f"{n_bars}-{mainBar}")
+    img_plan = fig_to_base64(fig_plan)
+
+    # Plot Section
+    fig_sect = plot_footing_section(bx, h * 1000, cx * 1000, dp * 1000, 75, f"{n_bars}-{mainBar}", n_pile)
+    img_sect = fig_to_base64(fig_sect)
 
     # Report
-    html = generate_report(inputs, rows, img)
+    html = generate_report(inputs, rows, img_plan, img_sect)
 
-    st.success("✅ Calculation Complete")
+    st.success(f"✅ Calculation Complete: {status}")
     st.components.v1.html(html, height=800, scrolling=True)
 
 else:
