@@ -46,7 +46,7 @@ st.markdown("""
     .sec-row {background-color: #e0e0e0; font-weight: bold; font-size: 15px;}
     .load-value {color: #D32F2F !important; font-weight: bold;}
 
-    /* จัด layout รูปภาพ */
+    /* Layout รูปภาพ */
     .drawing-container {
         display: flex;
         justify-content: center;
@@ -135,16 +135,12 @@ def process_footing_calculation(inputs):
     db = BAR_INFO[bar_key]['d_mm']
     d = h_cap - cover - db
 
-    # Geometry
+    # Geometry Calculation
     coords = get_pile_coordinates(n_pile, s)
 
     if n_pile == 1:
-        # F1: Size depends on Pile + Edge
-        width_x = dp + 2 * edge
-        width_y = dp + 2 * edge
-        # Ensure min width for column
-        width_x = max(width_x, col_x + 2 * edge)
-        width_y = max(width_y, col_y + 2 * edge)
+        width_x = max(dp + 2 * edge, col_x + 2 * edge)
+        width_y = max(dp + 2 * edge, col_y + 2 * edge)
     else:
         xs = [c[0] for c in coords];
         ys = [c[1] for c in coords]
@@ -154,101 +150,152 @@ def process_footing_calculation(inputs):
             width_x = s + dp + 2 * edge
             width_y = (s * math.sqrt(3) / 2) + dp + 2 * edge
 
+    # --- 1. GEOMETRY & MATERIALS ---
     sec("1. GEOMETRY & MATERIALS")
     row("Materials", "fc', fy", f"{fmt(fc, 2)}, {fmt(fy, 0)}", "-", "MPa")
-    row("Footing Size", "B x L x h", f"{fmt(width_x, 0)}x{fmt(width_y, 0)}x{fmt(h_cap, 0)}", "-", "mm")
-    row("Config", f"{n_pile} Piles", f"Spacing {s:.0f} mm", "-", "-")
+    row("Pile Cap Size", "B x L x h", f"{fmt(width_x, 0)} x {fmt(width_y, 0)} x {fmt(h_cap, 0)}", "-", "mm")
+    row("Effective Depth", "d = h - cover - db", f"{h_cap:.0f} - {cover} - {db}", f"{d:.0f}", "mm")
+    row("Pile Config", f"{n_pile} Piles, Dia {dp / 1000:.2f}m", f"Spacing {s:.0f} mm", "-", "-")
 
-    # --- 2. PILE CHECK ---
+    # --- 2. PILE REACTION ---
     sec("2. PILE REACTION CHECK")
     P_avg_tf = Pu_tf / n_pile
+    P_avg_N = (Pu_tf * 9806.65) / n_pile
+
     row("Load Input (Pu)", "-", "-", f"{fmt(Pu_tf, 3)}", "tf", "")
+    row("Pile Reaction (Ru)", "Pu / N", f"{fmt(Pu_tf, 2)} / {n_pile}", f"{fmt(P_avg_tf, 2)}", "tf")
 
     status_pile = "PASS" if P_avg_tf <= PileCap_tf else "FAIL"
-    row("Reaction (Ru)", "Pu / N", f"{fmt(Pu_tf, 2)} / {n_pile}", f"{fmt(P_avg_tf, 2)}", "tf")
-    row("Capacity Check", "Ru ≤ P_pile", f"{fmt(P_avg_tf, 2)} ≤ {fmt(PileCap_tf, 2)}", status_pile, "-", status_pile)
+    row("Capacity Check", "Ru ≤ P_pile(max)", f"{fmt(P_avg_tf, 2)} ≤ {fmt(PileCap_tf, 2)}", status_pile, "-",
+        status_pile)
 
+    # --- 3. ONE PILE (Special Case) ---
     if n_pile == 1:
-        # --- SPECIAL CASE FOR 1 PILE ---
-        sec("3. ONE PILE CAP DESIGN")
-        row("Note", "Load transfer directly", "Column to Pile", "-", "-", "INFO")
+        sec("3. REINFORCEMENT (F1)")
+        row("Note", "-", "Single Pile Cap", "-", "-", "INFO")
 
         # Min Steel (Temp & Shrinkage)
-        As_min = 0.0018 * width_x * h_cap  # Check both dirs
-        row("As (Min)", "0.0018 · B · h", f"0.0018·{width_x:.0f}·{h_cap:.0f}", f"{fmt(As_min, 0)}", "mm²")
+        As_min = 0.0018 * width_x * h_cap
+        row("As,min (Temp)", "0.0018 · B · h", f"0.0018 · {width_x:.0f} · {h_cap:.0f}", f"{fmt(As_min, 0)}", "mm²")
 
         bar_area = BAR_INFO[bar_key]['A_cm2'] * 100
         n_bars = math.ceil(As_min / bar_area)
-        # Minimum practical for cage usually 3-4 bars
-        if n_bars < 4: n_bars = 4
+        if n_bars < 4: n_bars = 4  # Cage min
+        As_prov = n_bars * bar_area
 
-        row("Provide Steel", f"Use {bar_key} (Cage)", f"Req: {fmt(As_min, 0)}", f"{n_bars}-{bar_key}", "mm²", "OK")
+        row("Provide Steel", f"Use {bar_key}", f"Req: {fmt(As_min, 0)}", f"{n_bars}-{bar_key}", "mm²", "OK")
+        row("As Provided", f"{n_bars} x {bar_area:.0f}", "-", f"{fmt(As_prov, 0)}", "mm²")
 
-        return rows, coords, width_x, width_y, n_bars, "PASS"  # Assume pass for 1 pile if reaction ok
+        return rows, coords, width_x, width_y, n_bars, "PASS"
 
-    # --- N > 1 CHECKS ---
-    # 3. PUNCHING
-    sec("3. PUNCHING SHEAR")
+    # --- 4. PUNCHING SHEAR (N > 1) ---
+    sec("3. PUNCHING SHEAR (at d/2 from Col)")
     c1 = col_x + d;
     c2 = col_y + d
     bo = 2 * (c1 + c2)
-    P_avg_N = (Pu_tf * 9806.65) / n_pile
 
+    # Calculate Vu
     Vu_punch_N = 0
+    piles_out = 0
     for (px, py) in coords:
         if (abs(px) > c1 / 2) or (abs(py) > c2 / 2):
             Vu_punch_N += P_avg_N
+            piles_out += 1
 
     Vu_punch_tf = Vu_punch_N / 9806.65
-    phiVc_punch_N = 0.75 * 0.33 * math.sqrt(fc) * bo * d
+
+    # Capacity
+    phi_v = 0.75
+    # Vc = 0.33 * sqrt(fc) * bo * d
+    Vc_punch_N = 0.33 * math.sqrt(fc) * bo * d
+    phiVc_punch_N = phi_v * Vc_punch_N
     phiVc_punch_tf = phiVc_punch_N / 9806.65
 
+    row("Critical Perimeter", "bo = 2(cx+d + cy+d)", f"2({c1:.0f} + {c2:.0f})", f"{bo:.0f}", "mm")
+    row("Vu (Punching)", f"Sum({piles_out} Piles Outside)", f"{piles_out} x {fmt(P_avg_tf, 2)}",
+        f"{fmt(Vu_punch_tf, 2)}", "tf")
+    row("Capacity φVc", "0.75·0.33√fc'·bo·d", f"0.75·0.33·{math.sqrt(fc):.2f}·{bo:.0f}·{d:.0f}",
+        f"{fmt(phiVc_punch_tf, 2)}", "tf")
+
     status_punch = "PASS" if Vu_punch_N <= phiVc_punch_N else "FAIL"
-    row("Vu (Punching)", "Sum Piles Outside", "-", f"{fmt(Vu_punch_tf, 2)}", "tf")
     row("Check Punching", "Vu ≤ φVc", f"{fmt(Vu_punch_tf, 2)} ≤ {fmt(phiVc_punch_tf, 2)}", status_punch, "-",
         status_punch)
 
-    # 4. BEAM SHEAR
-    sec("4. BEAM SHEAR (One-Way)")
+    # --- 5. BEAM SHEAR (One-Way) ---
+    sec("4. BEAM SHEAR (One-Way at d)")
     dist_crit = col_x / 2 + d
+
     Vu_beam_N = 0
+    piles_beam = 0
     for (px, py) in coords:
         if abs(px) > dist_crit:
             Vu_beam_N += P_avg_N
+            piles_beam += 1
 
     Vu_beam_tf = Vu_beam_N / 9806.65
-    phiVc_beam_N = 0.75 * 0.17 * math.sqrt(fc) * width_y * d
+
+    # Capacity Vc = 0.17 * sqrt(fc) * B * d
+    # width B here depends on direction check (take width_y for checking X direction shear)
+    Vc_beam_N = 0.17 * math.sqrt(fc) * width_y * d
+    phiVc_beam_N = phi_v * Vc_beam_N
     phiVc_beam_tf = phiVc_beam_N / 9806.65
+
+    row("Critical Section", "from center = c/2 + d", f"{col_x / 2:.0f} + {d:.0f}", f"{dist_crit:.0f}", "mm")
+    row("Vu (One-Way)", f"Sum({piles_beam} Piles Outside)", f"{piles_beam} x {fmt(P_avg_tf, 2)}",
+        f"{fmt(Vu_beam_tf, 2)}", "tf")
+    row("Capacity φVc", "0.75·0.17√fc'·B·d", f"0.75·0.17·{math.sqrt(fc):.2f}·{width_y:.0f}·{d:.0f}",
+        f"{fmt(phiVc_beam_tf, 2)}", "tf")
 
     status_beam = "PASS" if Vu_beam_N <= phiVc_beam_N else "FAIL"
     row("Check Beam Shear", "Vu ≤ φVc", f"{fmt(Vu_beam_tf, 2)} ≤ {fmt(phiVc_beam_tf, 2)}", status_beam, "-",
         status_beam)
 
-    # 5. FLEXURE
+    # --- 6. FLEXURE ---
     sec("5. FLEXURAL DESIGN")
     face_dist = col_x / 2
     Mu_calc_Nmm = 0
+
+    # Calculate Moment
+    calc_str = ""
     for (px, py) in coords:
         lever = abs(px) - face_dist
-        if lever > 0: Mu_calc_Nmm += P_avg_N * lever
+        if lever > 0:
+            Mu_calc_Nmm += P_avg_N * lever
+            calc_str += f"+ P·{lever:.0f} "
 
     Mu_calc_tfm = Mu_calc_Nmm / 9806650.0
-    req_As = Mu_calc_Nmm / (0.9 * fy * 0.9 * d) if Mu_calc_Nmm > 0 else 0
+
+    if calc_str == "": calc_str = "No Tension"
+
+    row("Design Moment Mu", "Σ P_pile · (x - c/2)", "Sum moments at face", f"{fmt(Mu_calc_tfm, 2)}", "tf-m")
+
+    # Steel Calculation
+    phi_f = 0.9
+    req_As = 0
+    if Mu_calc_Nmm > 0:
+        req_As = Mu_calc_Nmm / (phi_f * fy * 0.9 * d)
+        row("As (Strength)", "Mu / (φ·fy·0.9d)", f"{fmt(Mu_calc_tfm, 2)}e7 / (0.9·{fy:.0f}·0.9·{d:.0f})",
+            f"{fmt(req_As, 0)}", "mm²")
+    else:
+        row("As (Strength)", "-", "Mu approx 0", "0", "mm²")
+
     As_min = 0.0018 * width_y * h_cap
+    row("As (Min)", "0.0018 · B · h", f"0.0018 · {width_y:.0f} · {h_cap:.0f}", f"{fmt(As_min, 0)}", "mm²")
+
     As_design = max(req_As, As_min)
 
-    row("Design Moment Mu", "-", "-", f"{fmt(Mu_calc_tfm, 2)}", "tf-m")
-    row("As Req", "Max(Calc, Min)", f"Max({fmt(req_As, 0)}, {fmt(As_min, 0)})", f"{fmt(As_design, 0)}", "mm²")
-
+    # Provide
     bar_area = BAR_INFO[bar_key]['A_cm2'] * 100
     n_bars = math.ceil(As_design / bar_area)
+    As_prov = n_bars * bar_area
     s_prov = (width_y - 2 * cover) / n_bars
 
-    row("Provide Steel", f"Use {bar_key}", "-", f"{n_bars}-{bar_key}", "-", "OK")
+    row("Provide Steel", f"Use {bar_key}", f"Req: {fmt(As_design, 0)}", f"{n_bars}-{bar_key}", "mm²", "OK")
+    row("As Provided", f"{n_bars} x {bar_area:.0f}", "-", f"{fmt(As_prov, 0)}", "mm²")
     row("Spacing", "-", "-", f"@{s_prov / 10:.0f} cm", "-", "")
 
-    overall = "OK" if (status_pile == "PASS" and status_punch == "PASS" and status_beam == "PASS") else "NOT OK"
     sec("6. FINAL STATUS")
+    overall = "OK" if (status_pile == "PASS" and status_punch == "PASS" and status_beam == "PASS") else "NOT OK"
     row("Overall", "-", "-", "DESIGN COMPLETE", "-", overall)
 
     return rows, coords, width_x, width_y, n_bars, overall
@@ -266,28 +313,22 @@ def fig_to_base64(fig):
 
 def plot_footing_plan(coords, width_x, width_y, col_x, col_y, dp, bar_txt):
     fig, ax = plt.subplots(figsize=(5, 5))
-    # Footing
     rect = patches.Rectangle((-width_x / 2, -width_y / 2), width_x, width_y, linewidth=2, edgecolor='black',
                              facecolor='#f9f9f9')
     ax.add_patch(rect)
-    # Rebar Grid (Symbolic)
     for i in np.linspace(-width_x / 2 + 75, width_x / 2 - 75, 5):
         ax.plot([i, i], [-width_y / 2 + 75, width_y / 2 - 75], 'r-', alpha=0.3, linewidth=1)
     for i in np.linspace(-width_y / 2 + 75, width_y / 2 - 75, 5):
         ax.plot([-width_x / 2 + 75, width_x / 2 - 75], [i, i], 'r-', alpha=0.3, linewidth=1)
-
-    # Column
     rect_col = patches.Rectangle((-col_x / 2, -col_y / 2), col_x, col_y, linewidth=1.5, edgecolor='#333',
                                  facecolor='#ddd', hatch='//')
     ax.add_patch(rect_col)
-    # Piles
     for (px, py) in coords:
         circle = patches.Circle((px, py), radius=dp / 2, edgecolor='black', facecolor='white', linewidth=1.5,
                                 linestyle='--')
         ax.add_patch(circle)
         ax.text(px, py, "P", ha='center', va='center', fontsize=8)
-
-    ax.set_xlim(-width_x / 1.4, width_x / 1.4)
+    ax.set_xlim(-width_x / 1.4, width_x / 1.4);
     ax.set_ylim(-width_y / 1.4, width_y / 1.4)
     ax.set_aspect('equal');
     ax.axis('off')
@@ -298,64 +339,42 @@ def plot_footing_plan(coords, width_x, width_y, col_x, col_y, dp, bar_txt):
 
 def plot_footing_section(width, h, col_w, dp, cover, bar_txt, n_pile):
     fig, ax = plt.subplots(figsize=(5, 4))
-
-    # Ground
     ax.plot([-width, width], [0, 0], 'k-', linewidth=0.5)
-
-    # Pile Cap (Concrete)
     rect = patches.Rectangle((-width / 2, -h), width, h, linewidth=2, edgecolor='black', facecolor='#f0f0f0')
     ax.add_patch(rect)
-
-    # Column
     rect_col = patches.Rectangle((-col_w / 2, 0), col_w, h * 0.8, linewidth=1.5, edgecolor='black', facecolor='#fff',
                                  hatch='///')
     ax.add_patch(rect_col)
-    ax.plot([-col_w / 2, -col_w / 2], [h * 0.8, h * 1.0], 'k--', linewidth=0.5)  # break line
+    ax.plot([-col_w / 2, -col_w / 2], [h * 0.8, h * 1.0], 'k--', linewidth=0.5)
     ax.plot([col_w / 2, col_w / 2], [h * 0.8, h * 1.0], 'k--', linewidth=0.5)
-
-    # Piles
     pile_h = h * 0.6
     if n_pile == 1:
         rect_p = patches.Rectangle((-dp / 2, -h - pile_h), dp, pile_h, linewidth=1, edgecolor='black', facecolor='#fff')
         ax.add_patch(rect_p)
     else:
-        # Show 2 piles approx at edges
-        off = width / 2 - dp / 2 - 150  # approx edge dist
+        off = width / 2 - dp / 2 - 150
         rect_p1 = patches.Rectangle((-off - dp / 2, -h - pile_h), dp, pile_h, linewidth=1, edgecolor='black',
                                     facecolor='#fff')
         rect_p2 = patches.Rectangle((off - dp / 2, -h - pile_h), dp, pile_h, linewidth=1, edgecolor='black',
                                     facecolor='#fff')
         ax.add_patch(rect_p1);
         ax.add_patch(rect_p2)
-
-    # Rebar (Main Bottom) - U Shape
     bar_y = -h + cover
-    ax.plot([-width / 2 + cover, width / 2 - cover], [bar_y, bar_y], 'r-', linewidth=3)  # Horiz
-    # Hooks up
+    ax.plot([-width / 2 + cover, width / 2 - cover], [bar_y, bar_y], 'r-', linewidth=3)
     ax.plot([-width / 2 + cover, -width / 2 + cover], [bar_y, bar_y + h * 0.6], 'r-', linewidth=3)
     ax.plot([width / 2 - cover, width / 2 - cover], [bar_y, bar_y + h * 0.6], 'r-', linewidth=3)
-
-    # Transverse Bars (Dots)
-    n_dots = 6
-    dot_xs = np.linspace(-width / 2 + cover * 2, width / 2 - cover * 2, n_dots)
-    for x in dot_xs:
-        ax.add_patch(patches.Circle((x, bar_y + 15), radius=8, color='blue'))  # On top of main bar
-
-    # Top Bars (if any or stirrups) - Symbolic
+    dot_xs = np.linspace(-width / 2 + cover * 2, width / 2 - cover * 2, 6)
+    for x in dot_xs: ax.add_patch(patches.Circle((x, bar_y + 15), radius=8, color='blue'))
     top_y = -cover
     ax.plot([-width / 2 + cover, width / 2 - cover], [top_y, top_y], 'b-', linewidth=1.5)
-
-    # Dimensions & Labels
     ax.annotate(f"h={h / 1000:.2f}m", xy=(width / 2, -h / 2), xytext=(width / 2 + 100, -h / 2),
                 arrowprops=dict(arrowstyle='->'))
     ax.text(0, bar_y - 80, f"Main: {bar_txt}", ha='center', color='red', fontsize=9, fontweight='bold')
     ax.text(0, -h / 2, "Concrete Cover 7.5cm", ha='center', fontsize=8, alpha=0.6)
-
-    ax.set_xlim(-width / 1.2, width / 1.2)
-    ax.set_ylim(-h * 1.8, h * 1.2)
+    ax.set_xlim(-width / 1.2, width / 1.2);
+    ax.set_ylim(-h * 1.8, h * 1.2);
     ax.axis('off')
     ax.set_title("SECTION DETAIL", fontweight='bold', fontsize=12)
-
     return fig
 
 
@@ -386,7 +405,7 @@ def generate_report(inputs, rows, img_plan, img_sect):
     <html lang="th">
     <head>
         <meta charset="UTF-8">
-        <title>Pile Cap Report</title>
+        <title>Pile Cap Design Report</title>
         <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
         <style>
             body {{ font-family: 'Sarabun', sans-serif; padding: 20px; color: black; }}
@@ -399,11 +418,9 @@ def generate_report(inputs, rows, img_plan, img_sect):
             }}
             .info-container {{ display: flex; justify-content: space-between; margin-bottom: 20px; }}
             .info-box {{ width: 48%; border: 1px solid #ddd; padding: 10px; }}
-
             .drawing-container {{ display: flex; justify-content: center; gap: 20px; margin: 20px 0; }}
             .drawing-box {{ border: 1px solid #ccc; padding: 5px; text-align: center; width: 45%; }}
             .drawing-box img {{ max-width: 100%; height: auto; }}
-
             table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }}
             th, td {{ border: 1px solid #444; padding: 6px; }}
             th {{ background-color: #eee; }}
@@ -411,11 +428,9 @@ def generate_report(inputs, rows, img_plan, img_sect):
             .pass-ok {{ color: green; font-weight: bold; text-align: center; }}
             .pass-no {{ color: red; font-weight: bold; text-align: center; }}
             .load-value {{ color: #D32F2F !important; font-weight: bold; }}
-
             .footer-section {{ margin-top: 40px; page-break-inside: avoid; }}
             .signature-block {{ width: 300px; text-align: center; }}
             .sign-line {{ border-bottom: 1px solid #000; margin: 40px 0 10px 0; }}
-
             @media print {{
                 .no-print {{ display: none !important; }}
                 body {{ padding: 0; }}
