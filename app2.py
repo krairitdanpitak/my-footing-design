@@ -115,9 +115,12 @@ def process_footing_calculation(inputs):
     def row(item, formula, subs, result, unit, status=""):
         rows.append([item, formula, subs, result, unit, status])
 
-    # Inputs
-    fc = inputs['fc'] * 0.0980665  # MPa
-    fy = inputs['fy'] * 0.0980665
+    # Inputs & Conversions
+    fc_ksc = inputs['fc'];
+    fy_ksc = inputs['fy']
+    fc = fc_ksc * 0.0980665  # MPa
+    fy = fy_ksc * 0.0980665
+
     Pu_tf = inputs['Pu']
     Pu_N = Pu_tf * 9806.65
     PileCap_tf = inputs['PileCap']
@@ -133,9 +136,9 @@ def process_footing_calculation(inputs):
 
     bar_key = inputs['mainBar']
     db = BAR_INFO[bar_key]['d_mm']
-    d = h_cap - cover - db
+    d = h_cap - cover - db / 2  # Effective depth (assume 1 layer center)
 
-    # Geometry Calculation
+    # 1. Geometry Calculation
     coords = get_pile_coordinates(n_pile, s)
 
     if n_pile == 1:
@@ -150,17 +153,17 @@ def process_footing_calculation(inputs):
             width_x = s + dp + 2 * edge
             width_y = (s * math.sqrt(3) / 2) + dp + 2 * edge
 
-    # --- 1. GEOMETRY & MATERIALS ---
+    # --- SECTION 1: MATERIALS ---
     sec("1. GEOMETRY & MATERIALS")
     row("Materials", "fc', fy", f"{fmt(fc, 2)}, {fmt(fy, 0)}", "-", "MPa")
-    row("Pile Cap Size", "B x L x h", f"{fmt(width_x, 0)} x {fmt(width_y, 0)} x {fmt(h_cap, 0)}", "-", "mm")
-    row("Effective Depth", "d = h - cover - db", f"{h_cap:.0f} - {cover} - {db}", f"{d:.0f}", "mm")
+    row("Footing Size", "B x L x h", f"{fmt(width_x, 0)} x {fmt(width_y, 0)} x {fmt(h_cap, 0)}", "-", "mm")
+    row("Effective Depth", "d = h - cover - db/2", f"{h_cap:.0f} - {cover} - {db / 2:.1f}", f"{d:.1f}", "mm")
     row("Pile Config", f"{n_pile} Piles, Dia {dp / 1000:.2f}m", f"Spacing {s:.0f} mm", "-", "-")
 
-    # --- 2. PILE REACTION ---
+    # --- SECTION 2: PILE REACTION ---
     sec("2. PILE REACTION CHECK")
     P_avg_tf = Pu_tf / n_pile
-    P_avg_N = (Pu_tf * 9806.65) / n_pile
+    P_avg_N = Pu_N / n_pile
 
     row("Load Input (Pu)", "-", "-", f"{fmt(Pu_tf, 3)}", "tf", "")
     row("Pile Reaction (Ru)", "Pu / N", f"{fmt(Pu_tf, 2)} / {n_pile}", f"{fmt(P_avg_tf, 2)}", "tf")
@@ -169,130 +172,120 @@ def process_footing_calculation(inputs):
     row("Capacity Check", "Ru ≤ P_pile(max)", f"{fmt(P_avg_tf, 2)} ≤ {fmt(PileCap_tf, 2)}", status_pile, "-",
         status_pile)
 
-    # --- 3. ONE PILE (Special Case) ---
+    # --- SECTION 3: FLEXURE DESIGN ---
+    # Moved Flexure up to determine As for Shear checks if needed, but mainly standard practice
+    sec("3. FLEXURAL DESIGN")
+
     if n_pile == 1:
-        sec("3. REINFORCEMENT (F1)")
-        row("Note", "-", "Single Pile Cap", "-", "-", "INFO")
-
-        # Min Steel (Temp & Shrinkage)
-        As_min = 0.0018 * width_x * h_cap
-        row("As,min (Temp)", "0.0018 · B · h", f"0.0018 · {width_x:.0f} · {h_cap:.0f}", f"{fmt(As_min, 0)}", "mm²")
-
-        bar_area = BAR_INFO[bar_key]['A_cm2'] * 100
-        n_bars = math.ceil(As_min / bar_area)
-        if n_bars < 4: n_bars = 4  # Cage min
-        As_prov = n_bars * bar_area
-
-        row("Provide Steel", f"Use {bar_key}", f"Req: {fmt(As_min, 0)}", f"{n_bars}-{bar_key}", "mm²", "OK")
-        row("As Provided", f"{n_bars} x {bar_area:.0f}", "-", f"{fmt(As_prov, 0)}", "mm²")
-
-        return rows, coords, width_x, width_y, n_bars, "PASS"
-
-    # --- 4. PUNCHING SHEAR (N > 1) ---
-    sec("3. PUNCHING SHEAR (at d/2 from Col)")
-    c1 = col_x + d;
-    c2 = col_y + d
-    bo = 2 * (c1 + c2)
-
-    # Calculate Vu
-    Vu_punch_N = 0
-    piles_out = 0
-    for (px, py) in coords:
-        if (abs(px) > c1 / 2) or (abs(py) > c2 / 2):
-            Vu_punch_N += P_avg_N
-            piles_out += 1
-
-    Vu_punch_tf = Vu_punch_N / 9806.65
-
-    # Capacity
-    phi_v = 0.75
-    # Vc = 0.33 * sqrt(fc) * bo * d
-    Vc_punch_N = 0.33 * math.sqrt(fc) * bo * d
-    phiVc_punch_N = phi_v * Vc_punch_N
-    phiVc_punch_tf = phiVc_punch_N / 9806.65
-
-    row("Critical Perimeter", "bo = 2(cx+d + cy+d)", f"2({c1:.0f} + {c2:.0f})", f"{bo:.0f}", "mm")
-    row("Vu (Punching)", f"Sum({piles_out} Piles Outside)", f"{piles_out} x {fmt(P_avg_tf, 2)}",
-        f"{fmt(Vu_punch_tf, 2)}", "tf")
-    row("Capacity φVc", "0.75·0.33√fc'·bo·d", f"0.75·0.33·{math.sqrt(fc):.2f}·{bo:.0f}·{d:.0f}",
-        f"{fmt(phiVc_punch_tf, 2)}", "tf")
-
-    status_punch = "PASS" if Vu_punch_N <= phiVc_punch_N else "FAIL"
-    row("Check Punching", "Vu ≤ φVc", f"{fmt(Vu_punch_tf, 2)} ≤ {fmt(phiVc_punch_tf, 2)}", status_punch, "-",
-        status_punch)
-
-    # --- 5. BEAM SHEAR (One-Way) ---
-    sec("4. BEAM SHEAR (One-Way at d)")
-    dist_crit = col_x / 2 + d
-
-    Vu_beam_N = 0
-    piles_beam = 0
-    for (px, py) in coords:
-        if abs(px) > dist_crit:
-            Vu_beam_N += P_avg_N
-            piles_beam += 1
-
-    Vu_beam_tf = Vu_beam_N / 9806.65
-
-    # Capacity Vc = 0.17 * sqrt(fc) * B * d
-    # width B here depends on direction check (take width_y for checking X direction shear)
-    Vc_beam_N = 0.17 * math.sqrt(fc) * width_y * d
-    phiVc_beam_N = phi_v * Vc_beam_N
-    phiVc_beam_tf = phiVc_beam_N / 9806.65
-
-    row("Critical Section", "from center = c/2 + d", f"{col_x / 2:.0f} + {d:.0f}", f"{dist_crit:.0f}", "mm")
-    row("Vu (One-Way)", f"Sum({piles_beam} Piles Outside)", f"{piles_beam} x {fmt(P_avg_tf, 2)}",
-        f"{fmt(Vu_beam_tf, 2)}", "tf")
-    row("Capacity φVc", "0.75·0.17√fc'·B·d", f"0.75·0.17·{math.sqrt(fc):.2f}·{width_y:.0f}·{d:.0f}",
-        f"{fmt(phiVc_beam_tf, 2)}", "tf")
-
-    status_beam = "PASS" if Vu_beam_N <= phiVc_beam_N else "FAIL"
-    row("Check Beam Shear", "Vu ≤ φVc", f"{fmt(Vu_beam_tf, 2)} ≤ {fmt(phiVc_beam_tf, 2)}", status_beam, "-",
-        status_beam)
-
-    # --- 6. FLEXURE ---
-    sec("5. FLEXURAL DESIGN")
-    face_dist = col_x / 2
-    Mu_calc_Nmm = 0
-
-    # Calculate Moment
-    calc_str = ""
-    for (px, py) in coords:
-        lever = abs(px) - face_dist
-        if lever > 0:
-            Mu_calc_Nmm += P_avg_N * lever
-            calc_str += f"+ P·{lever:.0f} "
-
-    Mu_calc_tfm = Mu_calc_Nmm / 9806650.0
-
-    if calc_str == "": calc_str = "No Tension"
-
-    row("Design Moment Mu", "Σ P_pile · (x - c/2)", "Sum moments at face", f"{fmt(Mu_calc_tfm, 2)}", "tf-m")
-
-    # Steel Calculation
-    phi_f = 0.9
-    req_As = 0
-    if Mu_calc_Nmm > 0:
-        req_As = Mu_calc_Nmm / (phi_f * fy * 0.9 * d)
-        row("As (Strength)", "Mu / (φ·fy·0.9d)", f"{fmt(Mu_calc_tfm, 2)}e7 / (0.9·{fy:.0f}·0.9·{d:.0f})",
-            f"{fmt(req_As, 0)}", "mm²")
+        row("Moment", "One Pile", "Negligible Moment", "0", "tf-m")
+        req_As = 0
+        Mu_calc_tfm = 0
     else:
-        row("As (Strength)", "-", "Mu approx 0", "0", "mm²")
+        face_dist = col_x / 2
+        Mu_calc_Nmm = 0
+        calc_note = ""
+        for (px, py) in coords:
+            lever = abs(px) - face_dist
+            if lever > 0:
+                Mu_calc_Nmm += P_avg_N * lever
 
+        Mu_calc_tfm = Mu_calc_Nmm / 9806650.0
+        row("Design Moment Mu", "Σ P_pile · (x - c/2)", f"At Column Face", f"{fmt(Mu_calc_tfm, 2)}", "tf-m")
+
+        # As Req
+        phi_f = 0.9
+        # Approx j = 0.9
+        req_As = Mu_calc_Nmm / (phi_f * fy * 0.9 * d)
+        row("As (Strength)", "Mu / (φ·fy·0.9d)", f"{fmt(Mu_calc_tfm * 1000, 0)}kgm / ...", f"{fmt(req_As, 0)}", "mm²")
+
+    # Min Steel
     As_min = 0.0018 * width_y * h_cap
-    row("As (Min)", "0.0018 · B · h", f"0.0018 · {width_y:.0f} · {h_cap:.0f}", f"{fmt(As_min, 0)}", "mm²")
+    row("As,min (Temp)", "0.0018 · B · h", f"0.0018 · {width_y:.0f} · {h_cap:.0f}", f"{fmt(As_min, 0)}", "mm²")
 
     As_design = max(req_As, As_min)
 
     # Provide
     bar_area = BAR_INFO[bar_key]['A_cm2'] * 100
     n_bars = math.ceil(As_design / bar_area)
+    if n_pile == 1 and n_bars < 4: n_bars = 4  # Min cage
+
     As_prov = n_bars * bar_area
     s_prov = (width_y - 2 * cover) / n_bars
 
     row("Provide Steel", f"Use {bar_key}", f"Req: {fmt(As_design, 0)}", f"{n_bars}-{bar_key}", "mm²", "OK")
     row("As Provided", f"{n_bars} x {bar_area:.0f}", "-", f"{fmt(As_prov, 0)}", "mm²")
-    row("Spacing", "-", "-", f"@{s_prov / 10:.0f} cm", "-", "")
+    row("Spacing", "(B - 2cov) / n", f"{width_y:.0f} / {n_bars}", f"@{s_prov / 10:.0f} cm", "-", "")
+
+    # Skip Shear checks for 1 pile (Load transfer direct)
+    status_punch = "N/A"
+    status_beam = "N/A"
+
+    if n_pile > 1:
+        # --- SECTION 4: PUNCHING SHEAR ---
+        sec("4. PUNCHING SHEAR (Two-Way)")
+        c1 = col_x + d;
+        c2 = col_y + d
+        bo = 2 * (c1 + c2)
+
+        # Calculate Vu
+        Vu_punch_N = 0
+        piles_out = 0
+        for (px, py) in coords:
+            # Simple rectangular check
+            if (abs(px) > c1 / 2) or (abs(py) > c2 / 2):
+                Vu_punch_N += P_avg_N
+                piles_out += 1
+
+        Vu_punch_tf = Vu_punch_N / 9806.65
+
+        # Capacity (ACI Simplified)
+        phi_v = 0.75
+        Vc_punch_N = 0.33 * math.sqrt(fc) * bo * d
+        phiVc_punch_N = phi_v * Vc_punch_N
+        phiVc_punch_tf = phiVc_punch_N / 9806.65
+
+        row("Critical Perimeter", "bo = 2(cx+d + cy+d)", f"2({c1:.0f} + {c2:.0f})", f"{bo:.0f}", "mm")
+        row("Vu (Punching)", f"Sum({piles_out} Piles Outside)", f"{piles_out} x {fmt(P_avg_tf, 2)}",
+            f"{fmt(Vu_punch_tf, 2)}", "tf")
+        row("Capacity φVc", "0.75·0.33√fc'·bo·d", f"0.75·0.33·{math.sqrt(fc):.2f}·{bo:.0f}·{d:.0f}",
+            f"{fmt(phiVc_punch_tf, 2)}", "tf")
+
+        status_punch = "PASS" if Vu_punch_N <= phiVc_punch_N else "FAIL"
+        row("Check Punching", "Vu ≤ φVc", f"{fmt(Vu_punch_tf, 2)} ≤ {fmt(phiVc_punch_tf, 2)}", status_punch, "-",
+            status_punch)
+
+        # --- SECTION 5: BEAM SHEAR ---
+        sec("5. BEAM SHEAR (One-Way)")
+        dist_crit = col_x / 2 + d
+
+        Vu_beam_N = 0
+        piles_beam = 0
+        for (px, py) in coords:
+            # Check X-direction shear (usually controls if width > depth)
+            if abs(px) > dist_crit:
+                Vu_beam_N += P_avg_N
+                piles_beam += 1
+
+        Vu_beam_tf = Vu_beam_N / 9806.65
+
+        # Capacity Vc = 0.17 * sqrt(fc) * B * d
+        Vc_beam_N = 0.17 * math.sqrt(fc) * width_y * d
+        phiVc_beam_N = phi_v * Vc_beam_N
+        phiVc_beam_tf = phiVc_beam_N / 9806.65
+
+        row("Critical Section", "from center = c/2 + d", f"{col_x / 2:.0f} + {d:.0f}", f"{dist_crit:.0f}", "mm")
+        row("Vu (One-Way)", f"Sum({piles_beam} Piles Outside)", f"{piles_beam} x {fmt(P_avg_tf, 2)}",
+            f"{fmt(Vu_beam_tf, 2)}", "tf")
+        row("Capacity φVc", "0.75·0.17√fc'·B·d", f"0.75·0.17·{math.sqrt(fc):.2f}·{width_y:.0f}·{d:.0f}",
+            f"{fmt(phiVc_beam_tf, 2)}", "tf")
+
+        status_beam = "PASS" if Vu_beam_N <= phiVc_beam_N else "FAIL"
+        row("Check Beam Shear", "Vu ≤ φVc", f"{fmt(Vu_beam_tf, 2)} ≤ {fmt(phiVc_beam_tf, 2)}", status_beam, "-",
+            status_beam)
+    else:
+        # F1 Case
+        status_punch = "PASS"
+        status_beam = "PASS"
 
     sec("6. FINAL STATUS")
     overall = "OK" if (status_pile == "PASS" and status_punch == "PASS" and status_beam == "PASS") else "NOT OK"
@@ -316,6 +309,7 @@ def plot_footing_plan(coords, width_x, width_y, col_x, col_y, dp, bar_txt):
     rect = patches.Rectangle((-width_x / 2, -width_y / 2), width_x, width_y, linewidth=2, edgecolor='black',
                              facecolor='#f9f9f9')
     ax.add_patch(rect)
+    # Rebar Grid
     for i in np.linspace(-width_x / 2 + 75, width_x / 2 - 75, 5):
         ax.plot([i, i], [-width_y / 2 + 75, width_y / 2 - 75], 'r-', alpha=0.3, linewidth=1)
     for i in np.linspace(-width_y / 2 + 75, width_y / 2 - 75, 5):
@@ -418,9 +412,11 @@ def generate_report(inputs, rows, img_plan, img_sect):
             }}
             .info-container {{ display: flex; justify-content: space-between; margin-bottom: 20px; }}
             .info-box {{ width: 48%; border: 1px solid #ddd; padding: 10px; }}
+
             .drawing-container {{ display: flex; justify-content: center; gap: 20px; margin: 20px 0; }}
             .drawing-box {{ border: 1px solid #ccc; padding: 5px; text-align: center; width: 45%; }}
             .drawing-box img {{ max-width: 100%; height: auto; }}
+
             table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }}
             th, td {{ border: 1px solid #444; padding: 6px; }}
             th {{ background-color: #eee; }}
@@ -428,9 +424,11 @@ def generate_report(inputs, rows, img_plan, img_sect):
             .pass-ok {{ color: green; font-weight: bold; text-align: center; }}
             .pass-no {{ color: red; font-weight: bold; text-align: center; }}
             .load-value {{ color: #D32F2F !important; font-weight: bold; }}
+
             .footer-section {{ margin-top: 40px; page-break-inside: avoid; }}
             .signature-block {{ width: 300px; text-align: center; }}
             .sign-line {{ border-bottom: 1px solid #000; margin: 40px 0 10px 0; }}
+
             @media print {{
                 .no-print {{ display: none !important; }}
                 body {{ padding: 0; }}
@@ -477,7 +475,7 @@ def generate_report(inputs, rows, img_plan, img_sect):
             </div>
         </div>
 
-        <br>
+        <br><br><br>
 
         <h3>Calculation Details</h3>
         <table>
@@ -534,7 +532,6 @@ with st.sidebar.form("inputs"):
     cy = c2.number_input("Col Y (m)", 0.25)
 
     st.header("2. Pile Configuration")
-    # Added '1' for Single Pile
     n_pile = st.selectbox("Number of Piles", [1, 2, 3, 4, 5], index=1)
     c1, c2 = st.columns(2)
     dp = c1.number_input("Pile Dia (m)", 0.22)
