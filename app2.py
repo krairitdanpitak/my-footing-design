@@ -106,6 +106,52 @@ def get_pile_coordinates(n_pile, s):
     return []
 
 
+def check_shear_capacity(h_trial, inputs, coords, width_x, width_y):
+    """ฟังก์ชันช่วยคำนวณ Shear เพื่อหาความหนาที่เหมาะสม"""
+    fc = inputs['fc'] * 0.0980665  # MPa
+    Pu_tf = inputs['Pu']
+    n_pile = int(inputs['n_pile'])
+    col_x = inputs['cx'] * 1000
+    col_y = inputs['cy'] * 1000
+    cover = 75.0
+    bar_key = inputs['mainBar']
+    db = BAR_INFO[bar_key]['d_mm']
+
+    d = h_trial - cover - db / 2
+    if d <= 0: return False, 0, 0, 0
+
+    P_avg_N = (Pu_tf * 9806.65) / n_pile
+    phi_v = 0.75
+
+    # 1. Punching Shear
+    c1 = col_x + d;
+    c2 = col_y + d
+    bo = 2 * (c1 + c2)
+    Vu_punch_N = 0
+    for (px, py) in coords:
+        if (abs(px) > c1 / 2) or (abs(py) > c2 / 2):
+            Vu_punch_N += P_avg_N
+
+    Vc_punch_N = 0.33 * math.sqrt(fc) * bo * d
+    phiVc_punch_N = phi_v * Vc_punch_N
+
+    if Vu_punch_N > phiVc_punch_N: return False, d, Vu_punch_N, phiVc_punch_N
+
+    # 2. Beam Shear
+    dist_crit = col_x / 2 + d
+    Vu_beam_N = 0
+    for (px, py) in coords:
+        if abs(px) > dist_crit:
+            Vu_beam_N += P_avg_N
+
+    Vc_beam_N = 0.17 * math.sqrt(fc) * width_y * d
+    phiVc_beam_N = phi_v * Vc_beam_N
+
+    if Vu_beam_N > phiVc_beam_N: return False, d, Vu_beam_N, phiVc_beam_N
+
+    return True, d, 0, 0
+
+
 def process_footing_calculation(inputs):
     rows = []
 
@@ -130,15 +176,12 @@ def process_footing_calculation(inputs):
     edge = inputs['edge'] * 1000
     col_x = inputs['cx'] * 1000
     col_y = inputs['cy'] * 1000
-    h_cap = inputs['h'] * 1000
     dp = inputs['dp'] * 1000
     cover = 75.0
-
     bar_key = inputs['mainBar']
     db = BAR_INFO[bar_key]['d_mm']
-    d = h_cap - cover - db / 2  # Effective depth (assume 1 layer center)
 
-    # 1. Geometry Calculation
+    # 1. Geometry Calculation (Plan Size)
     coords = get_pile_coordinates(n_pile, s)
 
     if n_pile == 1:
@@ -153,17 +196,38 @@ def process_footing_calculation(inputs):
             width_x = s + dp + 2 * edge
             width_y = (s * math.sqrt(3) / 2) + dp + 2 * edge
 
-    # --- SECTION 1: MATERIALS ---
+    # 2. Auto-Design Thickness Logic
+    h_final = inputs['h'] * 1000  # Default from input
+    is_auto = inputs.get('auto_h', False)
+
+    if is_auto and n_pile > 1:
+        # Loop finding min h
+        h_try = 300.0  # Start 30cm
+        found_h = False
+        for _ in range(50):  # Max iterations
+            passed, _, _, _ = check_shear_capacity(h_try, inputs, coords, width_x, width_y)
+            if passed:
+                h_final = h_try
+                found_h = True
+                break
+            h_try += 50.0  # Step 5cm
+        if not found_h: h_final = h_try  # Limit reached
+
+    # Recalculate d with final h
+    d = h_final - cover - db / 2
+
+    # --- START REPORT ---
     sec("1. GEOMETRY & MATERIALS")
     row("Materials", "fc', fy", f"{fmt(fc, 2)}, {fmt(fy, 0)}", "-", "MPa")
-    row("Footing Size", "B x L x h", f"{fmt(width_x, 0)} x {fmt(width_y, 0)} x {fmt(h_cap, 0)}", "-", "mm")
-    row("Effective Depth", "d = h - cover - db/2", f"{h_cap:.0f} - {cover} - {db / 2:.1f}", f"{d:.1f}", "mm")
+    row("Pile Cap Size", "B x L (Calc)", f"{fmt(width_x, 0)} x {fmt(width_y, 0)}", "-", "mm")
+    row("Thickness (h)", "Auto-Designed" if is_auto else "User Input", "-", f"{fmt(h_final, 0)}", "mm")
+    row("Effective Depth", "d = h - cover - db/2", f"{h_final:.0f} - {cover} - {db / 2:.1f}", f"{d:.1f}", "mm")
     row("Pile Config", f"{n_pile} Piles, Dia {dp / 1000:.2f}m", f"Spacing {s:.0f} mm", "-", "-")
 
     # --- SECTION 2: PILE REACTION ---
     sec("2. PILE REACTION CHECK")
-    P_avg_tf = Pu_tf / n_pile
-    P_avg_N = Pu_N / n_pile
+    P_avg_tf = Pu_tf / n_pile if n_pile > 0 else 0
+    P_avg_N = Pu_N / n_pile if n_pile > 0 else 0
 
     row("Load Input (Pu)", "-", "-", f"{fmt(Pu_tf, 3)}", "tf", "")
     row("Pile Reaction (Ru)", "Pu / N", f"{fmt(Pu_tf, 2)} / {n_pile}", f"{fmt(P_avg_tf, 2)}", "tf")
@@ -173,7 +237,6 @@ def process_footing_calculation(inputs):
         status_pile)
 
     # --- SECTION 3: FLEXURE DESIGN ---
-    # Moved Flexure up to determine As for Shear checks if needed, but mainly standard practice
     sec("3. FLEXURAL DESIGN")
 
     if n_pile == 1:
@@ -183,7 +246,6 @@ def process_footing_calculation(inputs):
     else:
         face_dist = col_x / 2
         Mu_calc_Nmm = 0
-        calc_note = ""
         for (px, py) in coords:
             lever = abs(px) - face_dist
             if lever > 0:
@@ -194,13 +256,17 @@ def process_footing_calculation(inputs):
 
         # As Req
         phi_f = 0.9
-        # Approx j = 0.9
-        req_As = Mu_calc_Nmm / (phi_f * fy * 0.9 * d)
-        row("As (Strength)", "Mu / (φ·fy·0.9d)", f"{fmt(Mu_calc_tfm * 1000, 0)}kgm / ...", f"{fmt(req_As, 0)}", "mm²")
+        if Mu_calc_Nmm > 0:
+            req_As = Mu_calc_Nmm / (phi_f * fy * 0.9 * d)
+            row("As (Strength)", "Mu / (φ·fy·0.9d)", f"{fmt(Mu_calc_tfm * 1000, 0)}kgm / ...", f"{fmt(req_As, 0)}",
+                "mm²")
+        else:
+            req_As = 0
+            row("As (Strength)", "-", "Mu = 0", "0", "mm²")
 
     # Min Steel
-    As_min = 0.0018 * width_y * h_cap
-    row("As,min (Temp)", "0.0018 · B · h", f"0.0018 · {width_y:.0f} · {h_cap:.0f}", f"{fmt(As_min, 0)}", "mm²")
+    As_min = 0.0018 * width_y * h_final
+    row("As,min (Temp)", "0.0018 · B · h", f"0.0018 · {width_y:.0f} · {h_final:.0f}", f"{fmt(As_min, 0)}", "mm²")
 
     As_design = max(req_As, As_min)
 
@@ -210,13 +276,12 @@ def process_footing_calculation(inputs):
     if n_pile == 1 and n_bars < 4: n_bars = 4  # Min cage
 
     As_prov = n_bars * bar_area
-    s_prov = (width_y - 2 * cover) / n_bars
+    s_prov = (width_y - 2 * cover) / n_bars if n_bars > 0 else 0
 
     row("Provide Steel", f"Use {bar_key}", f"Req: {fmt(As_design, 0)}", f"{n_bars}-{bar_key}", "mm²", "OK")
     row("As Provided", f"{n_bars} x {bar_area:.0f}", "-", f"{fmt(As_prov, 0)}", "mm²")
     row("Spacing", "(B - 2cov) / n", f"{width_y:.0f} / {n_bars}", f"@{s_prov / 10:.0f} cm", "-", "")
 
-    # Skip Shear checks for 1 pile (Load transfer direct)
     status_punch = "N/A"
     status_beam = "N/A"
 
@@ -231,14 +296,13 @@ def process_footing_calculation(inputs):
         Vu_punch_N = 0
         piles_out = 0
         for (px, py) in coords:
-            # Simple rectangular check
             if (abs(px) > c1 / 2) or (abs(py) > c2 / 2):
                 Vu_punch_N += P_avg_N
                 piles_out += 1
 
         Vu_punch_tf = Vu_punch_N / 9806.65
 
-        # Capacity (ACI Simplified)
+        # Capacity
         phi_v = 0.75
         Vc_punch_N = 0.33 * math.sqrt(fc) * bo * d
         phiVc_punch_N = phi_v * Vc_punch_N
@@ -261,14 +325,12 @@ def process_footing_calculation(inputs):
         Vu_beam_N = 0
         piles_beam = 0
         for (px, py) in coords:
-            # Check X-direction shear (usually controls if width > depth)
             if abs(px) > dist_crit:
                 Vu_beam_N += P_avg_N
                 piles_beam += 1
 
         Vu_beam_tf = Vu_beam_N / 9806.65
 
-        # Capacity Vc = 0.17 * sqrt(fc) * B * d
         Vc_beam_N = 0.17 * math.sqrt(fc) * width_y * d
         phiVc_beam_N = phi_v * Vc_beam_N
         phiVc_beam_tf = phiVc_beam_N / 9806.65
@@ -283,7 +345,6 @@ def process_footing_calculation(inputs):
         row("Check Beam Shear", "Vu ≤ φVc", f"{fmt(Vu_beam_tf, 2)} ≤ {fmt(phiVc_beam_tf, 2)}", status_beam, "-",
             status_beam)
     else:
-        # F1 Case
         status_punch = "PASS"
         status_beam = "PASS"
 
@@ -291,7 +352,7 @@ def process_footing_calculation(inputs):
     overall = "OK" if (status_pile == "PASS" and status_punch == "PASS" and status_beam == "PASS") else "NOT OK"
     row("Overall", "-", "-", "DESIGN COMPLETE", "-", overall)
 
-    return rows, coords, width_x, width_y, n_bars, overall
+    return rows, coords, width_x, width_y, n_bars, overall, h_final
 
 
 # ==========================================
@@ -309,7 +370,6 @@ def plot_footing_plan(coords, width_x, width_y, col_x, col_y, dp, bar_txt):
     rect = patches.Rectangle((-width_x / 2, -width_y / 2), width_x, width_y, linewidth=2, edgecolor='black',
                              facecolor='#f9f9f9')
     ax.add_patch(rect)
-    # Rebar Grid
     for i in np.linspace(-width_x / 2 + 75, width_x / 2 - 75, 5):
         ax.plot([i, i], [-width_y / 2 + 75, width_y / 2 - 75], 'r-', alpha=0.3, linewidth=1)
     for i in np.linspace(-width_y / 2 + 75, width_y / 2 - 75, 5):
@@ -532,20 +592,24 @@ with st.sidebar.form("inputs"):
     cy = c2.number_input("Col Y (m)", 0.25)
 
     st.header("2. Pile Configuration")
+    # Added '1' for Single Pile
     n_pile = st.selectbox("Number of Piles", [1, 2, 3, 4, 5], index=1)
     c1, c2 = st.columns(2)
     dp = c1.number_input("Pile Dia (m)", 0.22)
     spacing = c2.number_input("Spacing (m)", 0.80)
 
     st.header("3. Footing Geometry")
+    auto_h = st.checkbox("ออกแบบความหนาอัตโนมัติ (Auto-Design)", value=True)
     c1, c2 = st.columns(2)
-    h = c1.number_input("Thickness (m)", 0.50)
+    h = c1.number_input("Thickness (m) [Initial/Fixed]", 0.50)
     edge = c2.number_input("Edge Dist (m)", 0.25)
     mainBar = st.selectbox("Main Rebar", list(BAR_INFO.keys()), index=4)  # DB16
 
     st.header("4. Loads (Factored)")
-    Pu = st.number_input("Axial Load Pu (tf)", 30.0)
-    PileCap = st.number_input("Max Factored Load/Pile (tf)", 30.0, help="ความสามารถรับน้ำหนักเสาเข็ม (Factored)")
+    # Allow 0.0 values
+    Pu = st.number_input("Axial Load Pu (tf)", min_value=0.0, value=30.0)
+    PileCap = st.number_input("Max Factored Load/Pile (tf)", min_value=0.0, value=30.0,
+                              help="ความสามารถรับน้ำหนักเสาเข็ม (Factored)")
 
     run_btn = st.form_submit_button("Run Design")
 
@@ -555,18 +619,18 @@ if run_btn:
         'fc': fc, 'fy': fy, 'cx': cx, 'cy': cy,
         'n_pile': n_pile, 'dp': dp, 'spacing': spacing,
         'h': h, 'edge': edge, 'mainBar': mainBar,
-        'Pu': Pu, 'PileCap': PileCap
+        'Pu': Pu, 'PileCap': PileCap, 'auto_h': auto_h
     }
 
     # Calculate
-    rows, coords, bx, by, n_bars, status = process_footing_calculation(inputs)
+    rows, coords, bx, by, n_bars, status, final_h = process_footing_calculation(inputs)
 
     # Plot Plan
     fig_plan = plot_footing_plan(coords, bx, by, cx * 1000, cy * 1000, dp * 1000, f"{n_bars}-{mainBar}")
     img_plan = fig_to_base64(fig_plan)
 
     # Plot Section
-    fig_sect = plot_footing_section(bx, h * 1000, cx * 1000, dp * 1000, 75, f"{n_bars}-{mainBar}", n_pile)
+    fig_sect = plot_footing_section(bx, final_h, cx * 1000, dp * 1000, 75, f"{n_bars}-{mainBar}", n_pile)
     img_sect = fig_to_base64(fig_sect)
 
     # Report
