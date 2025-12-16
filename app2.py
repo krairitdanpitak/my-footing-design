@@ -283,8 +283,12 @@ def process_footing_calculation(inputs):
     row("Dev. Length (Y-Dir)", f"Avail: {avail_y:.0f} mm", info_y, f"{req_len_y:.0f} ({type_y})", "mm", stat_y)
 
     sec("6. FINAL STATUS")
+    # ตรวจสอบว่ามีบรรทัดไหนที่ไม่ผ่านหรือไม่
     final_st = "OK" if "FAIL" not in [r[5] for r in rows] else "CHECK"
-    row("Overall Design", "-", "-", "CALCULATION DONE", "-", final_st)
+    # ถ้าผ่านหมด ให้แสดง "DESIGN COMPLETE" ถ้าไม่ผ่านให้แสดง "CALCULATION DONE" (หรือข้อความอื่นเพื่อเตือน)
+    final_msg = "DESIGN COMPLETE" if final_st == "OK" else "CALCULATION DONE"
+
+    row("Overall Design", "-", "-", final_msg, "-", final_st)
 
     return rows, coords, bx, by, res_bars.get('X-Dir', 4), res_bars.get('Y-Dir', 4), h_final
 
