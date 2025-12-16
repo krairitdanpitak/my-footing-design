@@ -60,6 +60,22 @@ st.markdown("""
         text-align: center;
         min-width: 300px;
     }
+
+    /* Footer Style */
+    .footer-section {
+        margin-top: 50px;
+        page-break-inside: avoid;
+        width: 100%;
+    }
+    .signature-block {
+        float: left; /* ชิดซ้าย */
+        width: 300px;
+        text-align: left;
+    }
+    .sign-line {
+        border-bottom: 1px solid #000;
+        margin: 40px 0 10px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -212,7 +228,7 @@ def process_footing_calculation(inputs):
     row("Capacity Check", "Ru ≤ P_pile_max", f"{fmt(P_avg_tf, 2)} ≤ {fmt(PileCap_tf, 2)}", status_pile, "-", "")
 
     # --- 3. FLEXURAL DESIGN ---
-    sec("3. FLEXURAL DESIGN (Detailed)")
+    sec("3. FLEXURAL DESIGN")
 
     # 3.1 Long Direction (X-Moment, Y-Bars)
     Mx_Nmm = 0
@@ -233,10 +249,16 @@ def process_footing_calculation(inputs):
     if n_pile == 1 and nx_bars < 4: nx_bars = 4
     As_prov_x = nx_bars * bar_area
 
-    row("Mu-X (Long)", "Σ P·(x - cx/2)", f"Sum(P * Lever)", f"{fmt(Mx_tfm, 2)}", "tf-m")
-    row("As-X Req", "Mu / (0.9·fy·0.9d)", f"{fmt(Mx_Nmm, 0)} / (0.9·{fy:.0f}·0.9·{d:.0f})", f"{fmt(req_As_x, 0)}",
-        "mm²")
-    row("As-X Min", "0.0018 · B · h", f"0.0018 · {width_y:.0f} · {h_final:.0f}", f"{fmt(As_min_x, 0)}", "mm²")
+    # Detailed Sub for Moment X
+    sub_mx = f"Sum(P*{fmt(abs(coords[0][0]) - col_x / 2, 2)})" if n_pile > 1 else "-"
+    row("Mu-X (Long)", "Σ P·(x - cx/2)", sub_mx, f"{fmt(Mx_tfm, 2)}", "tf-m")
+
+    sub_as_req_x = f"{fmt(Mx_Nmm, 0)} / (0.9·{fy:.0f}·0.9·{d:.0f})"
+    row("As-X Req", "Mu / (0.9·fy·0.9d)", sub_as_req_x, f"{fmt(req_As_x, 0)}", "mm²")
+
+    sub_as_min_x = f"0.0018 · {width_y:.0f} · {h_final:.0f}"
+    row("As-X Min", "0.0018 · B · h", sub_as_min_x, f"{fmt(As_min_x, 0)}", "mm²")
+
     row("Provide X-Dir", f"Use {bar_key}", f"Req {fmt(As_design_x, 0)} -> {nx_bars} bars", f"{nx_bars}-{bar_key}", "-",
         "OK")
 
@@ -257,7 +279,8 @@ def process_footing_calculation(inputs):
     if n_pile == 1 and ny_bars < 4: ny_bars = 4
     As_prov_y = ny_bars * bar_area
 
-    row("Mu-Y (Short)", "Σ P·(y - cy/2)", f"Sum(P * Lever)", f"{fmt(My_tfm, 2)}", "tf-m")
+    sub_my = f"Sum(P*{fmt(abs(coords[0][1]) - col_y / 2, 2)})" if n_pile > 1 else "-"
+    row("Mu-Y (Short)", "Σ P·(y - cy/2)", sub_my, f"{fmt(My_tfm, 2)}", "tf-m")
     row("Provide Y-Dir", f"Use {bar_key}", f"Req {fmt(As_design_y, 0)} -> {ny_bars} bars", f"{ny_bars}-{bar_key}", "-",
         "OK")
 
@@ -289,15 +312,19 @@ def process_footing_calculation(inputs):
         phiVc_punch_N = phi_v * Vc_punch_N
 
         row("Punching Perimeter", "bo = 2(c1+c2)", f"2({c1:.0f}+{c2:.0f})", f"{bo:.0f}", "mm")
-        row("Vu (Punching)", "Sum Piles Outside", "-", f"{fmt(Vu_punch_N / 9806.65, 2)}", "tf")
-        row("vc (Stress)", "min(eq a,b,c)", f"min({fmt(vc1, 2)}, {fmt(vc2, 2)}, {fmt(vc3, 2)})", f"{fmt(vc_punch, 2)}",
-            "MPa")
-        row("Capacity φVc", "0.75 · vc · bo · d", f"0.75·{vc_punch:.2f}·{bo:.0f}·{d:.0f}",
-            f"{fmt(phiVc_punch_N / 9806.65, 2)}", "tf")
+        row("Vu (Punching)", "Sum Piles Outside", f"Sum({fmt(P_avg_tf, 2)} tf)", f"{fmt(Vu_punch_N / 9806.65, 2)}",
+            "tf")
+
+        # Detailed Sub for Vc Stress
+        sub_vc_punch = f"min({fmt(vc1, 2)}, {fmt(vc2, 2)}, {fmt(vc3, 2)})"
+        row("vc (Stress)", "min(eq a,b,c)", sub_vc_punch, f"{fmt(vc_punch, 2)}", "MPa")
+
+        # Detailed Sub for Phi Vc
+        sub_phi_vc_p = f"0.75 · {fmt(vc_punch, 2)} · {fmt(bo, 0)} · {fmt(d, 0)}"
 
         st_p = "PASS" if Vu_punch_N <= phiVc_punch_N else "FAIL"
-        row("Check Punching", "φVc ≥ Vu", f"{fmt(phiVc_punch_N / 9806.65, 1)} ≥ {fmt(Vu_punch_N / 9806.65, 1)}", st_p,
-            "-", st_p)
+        row("Check Punching", "φVc ≥ Vu", sub_phi_vc_p,
+            f"{fmt(phiVc_punch_N / 9806.65, 2)} ≥ {fmt(Vu_punch_N / 9806.65, 2)}", "tf", st_p)
 
         # 4.2 Beam Shear (One-Way)
         dist_x = col_x / 2 + d
@@ -309,16 +336,21 @@ def process_footing_calculation(inputs):
         phiVc_beam_N = phi_v * Vc_beam_N
 
         row("Crit. Section", "d from col face", f"{dist_x:.0f} mm from center", "-", "-")
-        row("Vu (Beam)", "Sum Piles Outside", "-", f"{fmt(Vu_beam_N / 9806.65, 2)}", "tf")
-        row("ρw Factor", "(ρw)^1/3", f"({fmt(rho_w * 100, 2)}%)^1/3", f"{fmt(rho_term, 2)}", "-")
-        row("vc (Stress)", "0.66λs(ρ)^1/3√fc'", f"0.66·{lambda_s:.2f}·{rho_term:.2f}·√{fc:.0f}", f"{fmt(vc_beam, 2)}",
-            "MPa")
-        row("Capacity φVc", "0.75 · vc · B · d", f"0.75·{vc_beam:.2f}·{width_y:.0f}·{d:.0f}",
-            f"{fmt(phiVc_beam_N / 9806.65, 2)}", "tf")
+        row("Vu (Beam)", "Sum Piles Outside", f"Sum({fmt(P_avg_tf, 2)} tf)", f"{fmt(Vu_beam_N / 9806.65, 2)}", "tf")
+
+        sub_rho_term = f"({fmt(rho_w * 100, 2)}%)^(1/3)"
+        row("ρw Factor", "(ρw)^1/3", sub_rho_term, f"{fmt(rho_term, 2)}", "-")
+
+        # Detailed Sub for Vc Beam Stress
+        sub_vc_beam = f"0.66·{fmt(lambda_s, 2)}·{fmt(rho_term, 2)}·√{fmt(fc, 0)}"
+        row("vc (Stress)", "0.66λs(ρ)^1/3√fc'", sub_vc_beam, f"{fmt(vc_beam, 2)}", "MPa")
+
+        # Detailed Sub for Phi Vc Beam
+        sub_phi_vc_b = f"0.75 · {fmt(vc_beam, 2)} · {fmt(width_y, 0)} · {fmt(d, 0)}"
 
         st_b = "PASS" if Vu_beam_N <= phiVc_beam_N else "FAIL"
-        row("Beam Shear Check", "φVc ≥ Vu", f"{fmt(phiVc_beam_N / 9806.65, 1)} ≥ {fmt(Vu_beam_N / 9806.65, 1)}", st_b,
-            "-", st_b)
+        row("Beam Shear Check", "φVc ≥ Vu", sub_phi_vc_b,
+            f"{fmt(phiVc_beam_N / 9806.65, 2)} ≥ {fmt(Vu_beam_N / 9806.65, 2)}", "tf", st_b)
     else:
         st_p = "PASS";
         st_b = "PASS"
@@ -331,7 +363,7 @@ def process_footing_calculation(inputs):
 
 
 # ==========================================
-# 4. PLOTTING WITH DIMENSIONS
+# 4. PLOTTING WITH DIMENSIONS (TRUE SCALE)
 # ==========================================
 def fig_to_base64(fig):
     buf = io.BytesIO();
@@ -368,7 +400,13 @@ def draw_dim(ax, p1, p2, text, offset=50, color='black'):
 
 
 def plot_plan(coords, bx, by, cx, cy, dp, nx, ny, bar):
-    fig, ax = plt.subplots(figsize=(6, 6))
+    # Set figsize aspect roughly to match bx/by
+    ratio = bx / by
+    fig_w = 6;
+    fig_h = 6 / ratio if ratio > 1 else 6
+    if fig_h < 4: fig_h = 4
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.add_patch(patches.Rectangle((-bx / 2, -by / 2), bx, by, lw=2, ec='k', fc='#f9f9f9'))
 
     # Bars
@@ -382,27 +420,33 @@ def plot_plan(coords, bx, by, cx, cy, dp, nx, ny, bar):
         ax.add_patch(patches.Circle((px, py), dp / 2, ec='k', fc='white', ls='--'))
 
     # Dimensions
-    off = 250
+    off = max(bx, by) * 0.15
     draw_dim(ax, (-bx / 2, -by / 2 - off), (bx / 2, -by / 2 - off), f"L = {bx / 1000:.2f} m", 0)
     draw_dim(ax, (-bx / 2 - off, -by / 2), (-bx / 2 - off, by / 2), f"B = {by / 1000:.2f} m", 0)
 
     # Labels (Bubble style)
-    ax.annotate(f"{nx}-{bar} (Y-Dir)", xy=(0, by / 2 - 50), xytext=(0, by / 2 + 150),
+    ax.annotate(f"{nx}-{bar} (Y-Dir)", xy=(0, by / 2 - 50), xytext=(0, by / 2 + off),
                 arrowprops=dict(arrowstyle='->', color='red'), color='red', ha='center', fontweight='bold',
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red"))
-    ax.annotate(f"{ny}-{bar} (X-Dir)", xy=(bx / 2 - 50, 0), xytext=(bx / 2 + 150, 0),
+    ax.annotate(f"{ny}-{bar} (X-Dir)", xy=(bx / 2 - 50, 0), xytext=(bx / 2 + off, 0),
                 arrowprops=dict(arrowstyle='->', color='blue'), color='blue', ha='center', fontweight='bold',
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="blue"))
 
-    ax.set_xlim(-bx / 1.1, bx / 1.1);
-    ax.set_ylim(-by / 1.1, by / 1.1);
+    # Force Equal Aspect Ratio for True Scale
+    ax.set_aspect('equal', adjustable='box')
     ax.axis('off')
     ax.set_title("PLAN VIEW", fontweight='bold')
     return fig
 
 
 def plot_sect(bx, h, cx, dp, cov, bar, npile):
-    fig, ax = plt.subplots(figsize=(6, 4))
+    # Set figsize based on aspect ratio
+    ratio = bx / h
+    fig_w = 6;
+    fig_h = 6 / ratio if ratio > 1 else 6
+    if fig_h < 4: fig_h = 4
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.plot([-bx, bx], [0, 0], 'k-', lw=0.5)
     ax.add_patch(patches.Rectangle((-bx / 2, -h), bx, h, lw=2, ec='k', fc='#f0f0f0'))
     ax.add_patch(patches.Rectangle((-cx / 2, 0), cx, h * 0.5, lw=1.5, ec='k', fc='#fff', hatch='///'))
@@ -420,12 +464,15 @@ def plot_sect(bx, h, cx, dp, cov, bar, npile):
     ax.plot([-bx / 2 + cov, -bx / 2 + cov], [by, by + h * 0.6], 'r-', lw=3)
     ax.plot([bx / 2 - cov, bx / 2 - cov], [by, by + h * 0.6], 'r-', lw=3)
 
-    draw_dim(ax, (bx / 2 + 200, 0), (bx / 2 + 200, -h), f"h={h / 1000:.2f}m", 50)
-    draw_dim(ax, (-bx / 2, -h - ph - 100), (bx / 2, -h - ph - 100), f"Width={bx / 1000:.2f}m", 0)
+    # Dimensions
+    off = max(bx, h) * 0.15
+    draw_dim(ax, (bx / 2 + off, 0), (bx / 2 + off, -h), f"h={h / 1000:.2f}m", 50)
+    draw_dim(ax, (-bx / 2, -h - ph - off), (bx / 2, -h - ph - off), f"Width={bx / 1000:.2f}m", 0)
 
-    ax.text(0, by - 120, f"Main: {bar}", ha='center', color='red', fontweight='bold')
-    ax.set_xlim(-bx / 1.2, bx / 1.2);
-    ax.set_ylim(-h * 2, h);
+    ax.text(0, by - off, f"Main: {bar}", ha='center', color='red', fontweight='bold')
+
+    # Force Equal Aspect Ratio
+    ax.set_aspect('equal', adjustable='box')
     ax.axis('off')
     ax.set_title("SECTION DETAIL", fontweight='bold')
     return fig
@@ -503,10 +550,12 @@ if run_btn:
             <thead><tr><th width="20%">Item</th><th width="25%">Formula</th><th width="30%">Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr></thead>
             <tbody>{t_rows}</tbody>
         </table>
-        <div style="margin-top:40px; text-align:center;">
-            <div style="display:inline-block; width:250px; text-align:left;">
-                <strong>Designed by:</strong><br><br><div style="border-bottom:1px solid #000;"></div>
-                <div style="text-align:center; margin-top:5px;">({engineer})<br>วิศวกรโครงสร้าง</div>
+        <div class="footer-section">
+            <div class="signature-block">
+                <div style="text-align: left; font-weight: bold;">Designed by:</div>
+                <div class="sign-line"></div>
+                <div>({engineer})</div>
+                <div>วิศวกรโครงสร้าง</div>
             </div>
         </div>
     </div>
