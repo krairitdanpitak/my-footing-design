@@ -15,17 +15,12 @@ import streamlit.components.v1 as components
 # ==========================================
 st.set_page_config(page_title="RC Pile Cap Design (ACI 318-19)", layout="wide")
 
-# CSS สำหรับปรับแต่งหน้าจอหลักและซ่อน Elements เวลาสั่งพิมพ์
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
 
-    .stApp {
-        font-family: 'Sarabun', sans-serif;
-    }
-    h1, h2, h3 {
-        font-family: 'Sarabun', sans-serif;
-    }
+    .stApp { font-family: 'Sarabun', sans-serif; }
+    h1, h2, h3 { font-family: 'Sarabun', sans-serif; }
 
     /* ซ่อน Header และ Sidebar ของ Streamlit เมื่อสั่งพิมพ์ */
     @media print {
@@ -38,7 +33,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATABASE & HELPER
+# 2. DATABASE & HELPER FUNCTIONS
 # ==========================================
 BAR_INFO = {
     'RB6': {'A_cm2': 0.283, 'd_mm': 6},
@@ -53,7 +48,6 @@ BAR_INFO = {
 }
 
 
-# --- เพิ่มฟังก์ชัน fmt ที่ขาดหายไป ---
 def fmt(n, digits=2):
     try:
         val = float(n)
@@ -71,8 +65,48 @@ def fig_to_base64(fig):
     return f"data:image/png;base64,{img_str}"
 
 
+def check_development_length(inputs, bar_dia_mm, avail_mm):
+    """
+    ตรวจสอบ Development Length ตาม ACI 318-19
+    คืนค่า: (Length Required, Type (Straight/Hook), Status, Detailed Info)
+    """
+    fc_mpa = inputs['fc'] * 0.0980665
+    fy_mpa = inputs['fy'] * 0.0980665
+
+    # 1. Straight Ld (ACI 318-19 Sec 25.4.2)
+    # Assumptions: Bottom bar (psi_t=1.0), Uncoated (psi_e=1.0), Normal wt (lambda=1.0)
+    psi_t = 1.0;
+    psi_e = 1.0;
+    lam = 1.0
+
+    # Size Factor (psi_s)
+    if bar_dia_mm <= 19:
+        # Simplified Eq Table 25.4.2.2 (Case 2: Spacing/Cover OK)
+        ld_val = (fy_mpa * psi_t * psi_e) / (2.1 * lam * math.sqrt(fc_mpa)) * bar_dia_mm
+    else:
+        ld_val = (fy_mpa * psi_t * psi_e) / (1.7 * lam * math.sqrt(fc_mpa)) * bar_dia_mm
+
+    ld_req = max(ld_val, 300.0)
+
+    # 2. Hook Ldh (ACI 318-19 Sec 25.4.3)
+    # psi_c (Cover) = 0.7 for Side cover >= 65mm (Footing cover usually 75mm)
+    psi_c = 0.7
+    psi_r = 1.0  # Confinement
+
+    ldh_val = (0.24 * fy_mpa * psi_e * psi_c * psi_r) / (lam * math.sqrt(fc_mpa)) * bar_dia_mm
+    ldh_req = max(ldh_val, 8 * bar_dia_mm, 150.0)
+
+    # 3. Decision
+    if avail_mm >= ld_req:
+        return ld_req, "Straight", "PASS", f"Avail({avail_mm:.0f}) > Ld({ld_req:.0f})"
+    elif avail_mm >= ldh_req:
+        return ldh_req, "Hook 90°", "PASS", f"Avail({avail_mm:.0f}) > Ldh({ldh_req:.0f})"
+    else:
+        return ldh_req, "Hook 90°", "FAIL", f"Avail({avail_mm:.0f}) < Ldh({ldh_req:.0f})"
+
+
 # ==========================================
-# 3. CALCULATION LOGIC (Pile Cap)
+# 3. CALCULATION LOGIC
 # ==========================================
 def get_pile_coordinates(n_pile, s):
     if n_pile == 1:
@@ -104,7 +138,7 @@ def check_shear_capacity_silent(h_trial, inputs, coords, width_x, width_y):
     P_avg_N = (Pu_tf * 9806.65) / n_pile if n_pile > 0 else 0
     phi_v = 0.75
 
-    # 1. Punching Shear
+    # Punching Shear
     c1 = col_x + d;
     c2 = col_y + d
     Vu_punch_N = sum([P_avg_N for px, py in coords if (abs(px) > c1 / 2) or (abs(py) > c2 / 2)])
@@ -112,7 +146,7 @@ def check_shear_capacity_silent(h_trial, inputs, coords, width_x, width_y):
     Vc_punch_N = 0.33 * math.sqrt(fc) * bo * d
     if Vu_punch_N > phi_v * Vc_punch_N: return False
 
-    # 2. Beam Shear (Approx check along X)
+    # Beam Shear
     dist_crit = col_x / 2 + d
     Vu_beam_N = sum([P_avg_N for px, py in coords if abs(px) > dist_crit])
     Vc_beam_N = 0.17 * math.sqrt(fc) * width_y * d
@@ -192,7 +226,6 @@ def process_footing_calculation(inputs):
         if n_pile == 1: n = max(n, 4)
         prov_as = n * BAR_INFO[inputs['mainBar']]['A_cm2'] * 100
 
-        # Detailed Substitution
         sub_mu = f"Sum(P * Lever)"
         sub_as = f"Max({req_as:.0f}, {min_as:.0f})"
 
@@ -205,18 +238,19 @@ def process_footing_calculation(inputs):
     # --- 4. SHEAR ---
     if n_pile > 1:
         sec("4. SHEAR CHECKS (ACI 318-19)")
+
         # Punching
-        bo = 4 * (col_x + d)  # Simplified bo for center column
-        if n_pile == 2: bo = 2 * (col_x + d) + 2 * (col_y + d)  # Generic
+        bo = 4 * (col_x + d)
+        if n_pile == 2: bo = 2 * (col_x + d) + 2 * (col_y + d)
 
         vu_p = sum([p_n for x, y in coords if max(abs(x), abs(y)) > (max(col_x, col_y) + d) / 2])
         vc_p = 0.33 * lambda_s * math.sqrt(fc) * bo * d
         phi_vc_p = 0.75 * vc_p
 
-        row("Punching Vu", "Sum Outside Crit. Sect", "-", f"{vu_p / 9806:.2f}", "tf", "")
-
         sub_vc_p = f"0.75·0.33·{lambda_s:.2f}·√{fc:.0f}·{bo:.0f}·{d:.0f}"
         st_p = "PASS" if vu_p <= phi_vc_p else "FAIL"
+
+        row("Punching Vu", "Sum Outside Crit. Sect", "-", f"{vu_p / 9806:.2f}", "tf", "")
         row("Punching Capacity φVc", "0.75·0.33λs√fc·bo·d", sub_vc_p, f"{phi_vc_p / 9806:.2f}", "tf", st_p)
 
         # Beam Shear X
@@ -227,20 +261,36 @@ def process_footing_calculation(inputs):
         vc_b = 0.66 * lambda_s * rho_term * math.sqrt(fc) * by * d
         phi_vc_b = 0.75 * vc_b
 
-        row("Beam Vu (X-Axis)", "Sum Outside d", "-", f"{vu_b / 9806:.2f}", "tf", "")
-
         sub_vc_b = f"0.75·0.66·{lambda_s:.2f}·{rho_term:.2f}·√{fc:.0f}·{by:.0f}·{d:.0f}"
         st_b = "PASS" if vu_b <= phi_vc_b else "FAIL"
+
+        row("Beam Vu (X-Axis)", "Sum Outside d", "-", f"{vu_b / 9806:.2f}", "tf", "")
         row("Beam Capacity φVc", "0.75·0.66λs(ρ)^1/3√fc·bd", sub_vc_b, f"{phi_vc_b / 9806:.2f}", "tf", st_b)
 
-    sec("5. FINAL STATUS")
-    row("Overall Design", "-", "-", "DESIGN COMPLETE", "-", "OK")
+    # --- 5. DETAILING CHECK (Development Length) ---
+    sec("5. DETAILING CHECK (ACI 318-19)")
+
+    # Calculate Available Length
+    avail_x = (bx / 2) - (col_x / 2) - cover
+    avail_y = (by / 2) - (col_y / 2) - cover
+
+    # Check X-Direction
+    req_len_x, type_x, stat_x, info_x = check_development_length(inputs, db, avail_x)
+    row("Dev. Length (X-Dir)", f"Avail: {avail_x:.0f} mm", info_x, f"{req_len_x:.0f} ({type_x})", "mm", stat_x)
+
+    # Check Y-Direction
+    req_len_y, type_y, stat_y, info_y = check_development_length(inputs, db, avail_y)
+    row("Dev. Length (Y-Dir)", f"Avail: {avail_y:.0f} mm", info_y, f"{req_len_y:.0f} ({type_y})", "mm", stat_y)
+
+    sec("6. FINAL STATUS")
+    final_st = "OK" if "FAIL" not in [r[5] for r in rows] else "CHECK"
+    row("Overall Design", "-", "-", "CALCULATION DONE", "-", final_st)
 
     return rows, coords, bx, by, res_bars.get('X-Dir', 4), res_bars.get('Y-Dir', 4), h_final
 
 
 # ==========================================
-# 4. PLOTTING
+# 4. PLOTTING & REPORTING
 # ==========================================
 def draw_dim(ax, p1, p2, text, offset=50, color='black'):
     x1, y1 = p1;
@@ -310,85 +360,46 @@ def plot_foot_combined(coords, bx, by, nx, ny, bar, h_mm, cx_mm, cy_mm):
     return fig
 
 
-# ==========================================
-# 5. GENERATE REPORT (HTML Style)
-# ==========================================
 def generate_report_html(title, rows, imgs, proj, eng, elem_id, inputs):
-    # CSS Style embedded directly for the report component
     style = """
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
-
         body { font-family: 'Sarabun', sans-serif; color: #000; }
-
         .print-btn {
-            background-color: #4CAF50; /* Green */
-            border: none;
-            color: white;
-            padding: 10px 24px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 10px 2px;
-            cursor: pointer;
-            border-radius: 4px;
-            font-weight: bold;
+            background-color: #4CAF50; border: none; color: white; padding: 10px 24px;
+            text-align: center; text-decoration: none; display: inline-block;
+            font-size: 16px; margin: 10px 2px; cursor: pointer; border-radius: 4px; font-weight: bold;
         }
         .print-btn:hover { background-color: #45a049; }
-
         .report-container {
-            width: 210mm;
-            min-height: 297mm;
-            padding: 20mm;
-            margin: 10mm auto;
-            border: 1px solid #d3d3d3;
-            border-radius: 5px;
-            background: white;
+            width: 210mm; min-height: 297mm; padding: 20mm; margin: 10mm auto;
+            border: 1px solid #d3d3d3; border-radius: 5px; background: white;
             box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
         }
-
-        /* Header Section */
         .header { text-align: center; margin-bottom: 20px; position: relative; }
         .header h1 { margin: 0; font-size: 24px; font-weight: bold; text-transform: uppercase; }
         .header h2 { margin: 5px 0 0 0; font-size: 18px; font-weight: bold; color: #333; }
         .id-box { position: absolute; top: 0; right: 0; border: 2px solid #000; padding: 5px 10px; font-weight: bold; font-size: 16px; }
-
-        /* Info Box */
         .info-box {
-            border: 1px solid #ccc;
-            padding: 15px;
-            margin-bottom: 20px;
-            display: flex;
-            justify-content: space-between;
-            background-color: #f9f9f9;
-            font-size: 14px;
+            border: 1px solid #ccc; padding: 15px; margin-bottom: 20px;
+            display: flex; justify-content: space-between; background-color: #f9f9f9; font-size: 14px;
         }
         .info-col { width: 48%; }
         .info-item { margin-bottom: 5px; }
-
-        /* Summary Section */
         .summary-title { text-align: center; font-weight: bold; font-size: 16px; margin-bottom: 10px; border-bottom: 2px solid #ddd; padding-bottom: 5px; }
         .img-container { text-align: center; margin-bottom: 20px; }
         .img-container img { max-width: 100%; height: auto; border: 1px solid #eee; padding: 5px; }
-
-        /* Calculation Table */
         table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
         th, td { border: 1px solid #000; padding: 6px 8px; vertical-align: top; }
         th { background-color: #f2f2f2; font-weight: bold; text-align: center; }
         .sec-row td { background-color: #e6e6e6; font-weight: bold; text-align: left; padding-left: 10px; }
-
         .status-pass { color: green; font-weight: bold; text-align: center; }
         .status-fail { color: red; font-weight: bold; text-align: center; }
         .col-result { font-weight: bold; text-align: right; }
         .col-unit { text-align: center; }
-
-        /* Footer */
         .footer { margin-top: 50px; display: flex; justify-content: space-between; page-break-inside: avoid; }
         .sign-box { width: 250px; text-align: center; }
         .sign-line { border-bottom: 1px solid #000; margin-bottom: 5px; height: 40px; }
-
-        /* Print Media Query */
         @media print {
             body { background: none; -webkit-print-color-adjust: exact; }
             .report-container { width: 100%; margin: 0; padding: 0; border: none; box-shadow: none; }
@@ -398,7 +409,6 @@ def generate_report_html(title, rows, imgs, proj, eng, elem_id, inputs):
     </style>
     """
 
-    # Generate Table Rows
     table_html = ""
     for r in rows:
         if r[0] == "SECTION":
@@ -416,7 +426,6 @@ def generate_report_html(title, rows, imgs, proj, eng, elem_id, inputs):
             </tr>
             """
 
-    # Combine everything
     html_content = f"""
     <html>
     <head>{style}</head>
@@ -483,7 +492,7 @@ def generate_report_html(title, rows, imgs, proj, eng, elem_id, inputs):
 
 
 # ==========================================
-# 6. MAIN UI
+# 5. MAIN UI
 # ==========================================
 st.title("RC Pile Cap Design SDM")
 
@@ -523,7 +532,7 @@ if run_btn:
 
     # 1. Calculate
     rows, coords, bx, by, nx, ny, h_calc = process_footing_calculation(d_inputs)
-    d_inputs['h'] = fmt(h_calc / 1000)  # Update H for report using fmt
+    d_inputs['h'] = fmt(h_calc / 1000)  # Update H for report
 
     # 2. Plot
     img_b64 = fig_to_base64(plot_foot_combined(coords, bx, by, nx, ny, mainBar, h_calc, cx * 1000, cy * 1000))
