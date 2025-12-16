@@ -61,20 +61,20 @@ st.markdown("""
         min-width: 300px;
     }
 
-    /* Footer Style */
+    /* Footer Style Match Beam Module */
     .footer-section {
         margin-top: 50px;
         page-break-inside: avoid;
         width: 100%;
     }
     .signature-block {
-        float: left; /* ชิดซ้าย */
+        float: left; /* ชิดซ้าย เหมือนโมดูลคาน */
         width: 300px;
         text-align: left;
     }
     .sign-line {
         border-bottom: 1px solid #000;
-        margin: 40px 0 10px 0;
+        margin: 30px 0 5px 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -249,7 +249,6 @@ def process_footing_calculation(inputs):
     if n_pile == 1 and nx_bars < 4: nx_bars = 4
     As_prov_x = nx_bars * bar_area
 
-    # Detailed Sub for Moment X
     sub_mx = f"Sum(P*{fmt(abs(coords[0][0]) - col_x / 2, 2)})" if n_pile > 1 else "-"
     row("Mu-X (Long)", "Σ P·(x - cx/2)", sub_mx, f"{fmt(Mx_tfm, 2)}", "tf-m")
 
@@ -302,7 +301,6 @@ def process_footing_calculation(inputs):
 
         Vu_punch_N = sum([P_avg_N for px, py in coords if (abs(px) > c1 / 2 or abs(py) > c2 / 2)])
 
-        # Vc Formulas
         vc1 = 0.33 * lambda_s * math.sqrt(fc)
         vc2 = 0.17 * (1 + 2 / beta) * lambda_s * math.sqrt(fc)
         vc3 = 0.083 * (2 + alpha_s * d / bo) * lambda_s * math.sqrt(fc)
@@ -315,13 +313,10 @@ def process_footing_calculation(inputs):
         row("Vu (Punching)", "Sum Piles Outside", f"Sum({fmt(P_avg_tf, 2)} tf)", f"{fmt(Vu_punch_N / 9806.65, 2)}",
             "tf")
 
-        # Detailed Sub for Vc Stress
         sub_vc_punch = f"min({fmt(vc1, 2)}, {fmt(vc2, 2)}, {fmt(vc3, 2)})"
         row("vc (Stress)", "min(eq a,b,c)", sub_vc_punch, f"{fmt(vc_punch, 2)}", "MPa")
 
-        # Detailed Sub for Phi Vc
         sub_phi_vc_p = f"0.75 · {fmt(vc_punch, 2)} · {fmt(bo, 0)} · {fmt(d, 0)}"
-
         st_p = "PASS" if Vu_punch_N <= phiVc_punch_N else "FAIL"
         row("Check Punching", "φVc ≥ Vu", sub_phi_vc_p,
             f"{fmt(phiVc_punch_N / 9806.65, 2)} ≥ {fmt(Vu_punch_N / 9806.65, 2)}", "tf", st_p)
@@ -330,7 +325,6 @@ def process_footing_calculation(inputs):
         dist_x = col_x / 2 + d
         Vu_beam_N = sum([P_avg_N for px, py in coords if abs(px) > dist_x])
 
-        # ACI 318-19 Eq 22.5.5.1
         vc_beam = 0.66 * lambda_s * rho_term * math.sqrt(fc)
         Vc_beam_N = vc_beam * width_y * d
         phiVc_beam_N = phi_v * Vc_beam_N
@@ -341,13 +335,10 @@ def process_footing_calculation(inputs):
         sub_rho_term = f"({fmt(rho_w * 100, 2)}%)^(1/3)"
         row("ρw Factor", "(ρw)^1/3", sub_rho_term, f"{fmt(rho_term, 2)}", "-")
 
-        # Detailed Sub for Vc Beam Stress
         sub_vc_beam = f"0.66·{fmt(lambda_s, 2)}·{fmt(rho_term, 2)}·√{fmt(fc, 0)}"
         row("vc (Stress)", "0.66λs(ρ)^1/3√fc'", sub_vc_beam, f"{fmt(vc_beam, 2)}", "MPa")
 
-        # Detailed Sub for Phi Vc Beam
         sub_phi_vc_b = f"0.75 · {fmt(vc_beam, 2)} · {fmt(width_y, 0)} · {fmt(d, 0)}"
-
         st_b = "PASS" if Vu_beam_N <= phiVc_beam_N else "FAIL"
         row("Beam Shear Check", "φVc ≥ Vu", sub_phi_vc_b,
             f"{fmt(phiVc_beam_N / 9806.65, 2)} ≥ {fmt(Vu_beam_N / 9806.65, 2)}", "tf", st_b)
@@ -529,6 +520,10 @@ if run_btn:
 
     html = f"""
     <div style="font-family: Sarabun, sans-serif; padding: 20px;">
+        <div style="text-align:center;">
+            <button onclick="window.print()" class="print-btn-internal">🖨️ Print This Page / พิมพ์หน้านี้</button>
+        </div>
+        <br>
         <div style="text-align:center; border-bottom: 2px solid #333; margin-bottom: 20px;">
             <div style="float:right; border:2px solid #333; padding:5px 10px; font-weight:bold;">{f_id}</div>
             <h2>ENGINEERING DESIGN REPORT</h2>
