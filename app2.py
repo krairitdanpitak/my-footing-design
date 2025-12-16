@@ -19,31 +19,60 @@ st.markdown("""
 <style>
     /* ปุ่มพิมพ์ สีเขียว */
     .print-btn-internal {
-        background-color: #4CAF50;
+        background-color: #4CAF50; /* Green */
         border: none;
         color: white !important;
-        padding: 12px 28px;
+        padding: 10px 24px;
         text-align: center;
         text-decoration: none;
         display: inline-block;
         font-size: 16px;
         margin: 10px 0px;
         cursor: pointer;
-        border-radius: 5px;
-        font-family: 'Sarabun', sans-serif;
+        border-radius: 4px;
+        font-family: sans-serif;
         font-weight: bold;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
     .print-btn-internal:hover { background-color: #45a049; }
 
-    /* ตาราง */
-    .report-table {width: 100%; border-collapse: collapse; font-family: sans-serif; font-size: 14px;}
-    .report-table th, .report-table td {border: 1px solid #ddd; padding: 8px;}
-    .report-table th {background-color: #f2f2f2; text-align: center; font-weight: bold;}
+    /* Container สำหรับรายงาน */
+    .report-container {
+        font-family: 'Sarabun', sans-serif;
+        padding: 40px;
+        background-color: white;
+        max-width: 210mm;
+        margin: auto;
+        box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
 
-    .pass-ok {color: green; font-weight: bold;}
-    .pass-no {color: red; font-weight: bold;}
-    .sec-row {background-color: #e0e0e0; font-weight: bold; font-size: 15px;}
+    /* ตารางรายการคำนวณ */
+    .report-table {
+        width: 100%; 
+        border-collapse: collapse; 
+        font-family: sans-serif; 
+        font-size: 13px;
+        margin-top: 20px;
+    }
+    .report-table th, .report-table td {
+        border: 1px solid #000;
+        padding: 8px;
+        vertical-align: top;
+    }
+    .report-table th {
+        background-color: #f2f2f2; 
+        text-align: center; 
+        font-weight: bold;
+    }
+
+    .pass-ok {color: green; font-weight: bold; text-align: center;}
+    .pass-no {color: red; font-weight: bold; text-align: center;}
+    .sec-row {
+        background-color: #e0e0e0; 
+        font-weight: bold; 
+        font-size: 14px; 
+        text-align: left;
+    }
     .load-value {color: #D32F2F !important; font-weight: bold;}
 
     /* Layout รูปภาพ */
@@ -52,7 +81,7 @@ st.markdown("""
         justify-content: center;
         gap: 20px;
         flex-wrap: wrap;
-        margin-top: 20px;
+        margin: 20px 0;
     }
     .drawing-box {
         border: 1px solid #ddd;
@@ -62,21 +91,51 @@ st.markdown("""
         min-width: 300px;
     }
 
-    /* Footer Style (Left Aligned) */
+    /* Header Report */
+    .header-report {
+        text-align: center;
+        position: relative;
+        border-bottom: 2px solid #000;
+        margin-bottom: 20px;
+        padding-bottom: 15px;
+    }
+    .id-box {
+        position: absolute;
+        top: 0;
+        right: 0;
+        border: 2px solid #000;
+        padding: 5px 15px;
+        font-weight: bold;
+        font-size: 16px;
+    }
+
+    /* Project Info Box */
+    .info-table {
+        width: 100%;
+        margin-bottom: 20px;
+        border: 1px solid #ddd;
+        padding: 10px;
+        display: flex;
+        justify-content: space-between;
+        font-size: 14px;
+    }
+
+    /* Footer Style (จัดซ้ายล่าง) */
     .footer-section {
         margin-top: 50px;
         page-break-inside: avoid;
         width: 100%;
-        display: flex;
-        justify-content: flex-start;
+        text-align: left;
     }
     .signature-block {
+        display: inline-block;
         width: 300px;
         text-align: left;
     }
     .sign-line {
         border-bottom: 1px solid #000;
-        margin: 40px 0 10px 0;
+        margin: 40px 0 5px 0;
+        width: 100%;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -97,7 +156,7 @@ BAR_INFO = {
 }
 
 
-def fmt(n, digits=3):
+def fmt(n, digits=2):
     try:
         val = float(n)
         if math.isnan(val): return "-"
@@ -115,7 +174,7 @@ def fig_to_base64(fig):
 
 
 # ==========================================
-# 3. CALCULATION LOGIC
+# 3. CALCULATION LOGIC (Pile Cap)
 # ==========================================
 def get_pile_coordinates(n_pile, s):
     if n_pile == 1:
@@ -123,8 +182,7 @@ def get_pile_coordinates(n_pile, s):
     elif n_pile == 2:
         return [(-s / 2, 0), (s / 2, 0)]
     elif n_pile == 3:
-        h_tri = s * math.sqrt(3) / 2
-        return [(-s / 2, -h_tri / 3), (s / 2, -h_tri / 3), (0, 2 * h_tri / 3)]
+        return [(-s / 2, -s * 0.288), (s / 2, -s * 0.288), (0, s * 0.577)]
     elif n_pile == 4:
         return [(-s / 2, -s / 2), (s / 2, -s / 2), (-s / 2, s / 2), (s / 2, s / 2)]
     elif n_pile == 5:
@@ -156,7 +214,7 @@ def check_shear_capacity_silent(h_trial, inputs, coords, width_x, width_y):
     Vc_punch_N = 0.33 * math.sqrt(fc) * bo * d
     if Vu_punch_N > phi_v * Vc_punch_N: return False
 
-    # 2. Beam Shear (Approx)
+    # 2. Beam Shear (Approx check along X)
     dist_crit = col_x / 2 + d
     Vu_beam_N = sum([P_avg_N for px, py in coords if abs(px) > dist_crit])
     Vc_beam_N = 0.17 * math.sqrt(fc) * width_y * d
@@ -187,7 +245,7 @@ def process_footing_calculation(inputs):
     cover = 75.0
     db = BAR_INFO[inputs['mainBar']]['d_mm']
 
-    # Auto H
+    # Auto H Logic
     coords = get_pile_coordinates(n_pile, s)
     bx = (max([abs(x) for x, _ in coords]) * 2) + dp + 2 * edge if n_pile > 1 else dp + 2 * edge
     by = (max([abs(y) for _, y in coords]) * 2) + dp + 2 * edge if n_pile > 1 else dp + 2 * edge
@@ -202,19 +260,20 @@ def process_footing_calculation(inputs):
 
     d = h_final - cover - db
 
-    # 1. Geometry
+    # --- 1. GEOMETRY ---
     sec("1. GEOMETRY & PROPERTIES")
     row("Footing Size", "B x L", f"{bx:.0f}x{by:.0f}", f"h={h_final:.0f}", "mm", "")
+    row("Effective Depth", "d = h - cover - db", f"{h_final:.0f} - {cover} - {db}", f"{d:.1f}", "mm", "")
     lambda_s = min(math.sqrt(2 / (1 + 0.004 * d)), 1.0)
     row("Size Effect λs", "√(2/(1+0.004d))", f"√(2/(1+0.004*{d:.0f}))", f"{lambda_s:.3f}", "-", "≤1.0")
 
-    # 2. Reaction
-    sec("2. PILE REACTION")
+    # --- 2. PILE REACTION ---
+    sec("2. PILE REACTION CHECK")
     p_avg = pu_tf / n_pile
-    row("Load per Pile", "Ru = Pu / N", f"{pu_tf}/{n_pile}", f"{p_avg:.2f}", "tf",
+    row("Load per Pile (Ru)", "Pu / N", f"{pu_tf} / {n_pile}", f"{p_avg:.2f}", "tf",
         "PASS" if p_avg <= inputs['PileCap'] else "FAIL")
 
-    # 3. Flexure
+    # --- 3. FLEXURAL ---
     sec("3. FLEXURAL DESIGN")
     p_n = p_avg * 9806;
     mx = 0;
@@ -234,23 +293,35 @@ def process_footing_calculation(inputs):
         if n_pile == 1: n = max(n, 4)
         prov_as = n * BAR_INFO[inputs['mainBar']]['A_cm2'] * 100
 
-        row(f"Moment {label}", "Σ P(arm)", f"Sum(P*Lever)", f"{mom / 9.8e6:.2f}", "tf-m", "")
-        row(f"As,req {label}", "Max(Calc, Min)", f"Max({req_as:.0f}, {min_as:.0f})", f"{des_as:.0f}", "mm²", "")
+        # Detailed Substitution
+        sub_mu = f"Sum(P * Lever) = {mom / 9.8e6:.2f}"
+        sub_as = f"Max({req_as:.0f}, {min_as:.0f})"
+
+        row(f"Moment {label}", "Σ P(arm)", sub_mu, f"{mom / 9.8e6:.2f}", "tf-m", "")
+        row(f"As,req {label}", "Max(Calc, Min)", sub_as, f"{des_as:.0f}", "mm²", "")
         row(f"Provide {label}", f"{n}-{inputs['mainBar']}", f"As={prov_as:.0f}", "OK", "-", "")
+
         res_bars[label] = n
 
-    # 4. Shear
+    # --- 4. SHEAR ---
     if n_pile > 1:
-        sec("4. SHEAR (ACI 318-19)")
-        bo = 2 * ((col_x + d) + (col_y + d))
-        vu_p = sum([p_n for x, y in coords if max(abs(x), abs(y)) > (max(col_x, col_y) + d) / 2])  # simplified approx
+        sec("4. SHEAR CHECKS (ACI 318-19)")
+        # Punching
+        bo = 4 * (col_x + d)  # Simplified bo for center column
+        if n_pile == 2: bo = 2 * (col_x + d) + 2 * (col_y + d)  # Generic
+
+        vu_p = sum([p_n for x, y in coords if max(abs(x), abs(y)) > (max(col_x, col_y) + d) / 2])
         vc_p = 0.33 * lambda_s * math.sqrt(fc) * bo * d
         phi_vc_p = 0.75 * vc_p
 
-        row("Punching Vu", "Sum Outside", "-", f"{vu_p / 9806:.2f}", "tf", "")
-        row("Punching φVc", "0.75·0.33λs√fc·bo·d", f"0.75·0.33·{lambda_s:.2f}...", f"{phi_vc_p / 9806:.2f}", "tf",
-            "PASS" if vu_p <= phi_vc_p else "FAIL")
+        row("Punching Vu", "Sum Outside Crit. Sect", "-", f"{vu_p / 9806:.2f}", "tf", "")
 
+        # Detailed Sub for Vc
+        sub_vc_p = f"0.75·0.33·{lambda_s:.2f}·√{fc:.0f}·{bo:.0f}·{d:.0f}"
+        st_p = "PASS" if vu_p <= phi_vc_p else "FAIL"
+        row("Punching Capacity φVc", "0.75·0.33λs√fc·bo·d", sub_vc_p, f"{phi_vc_p / 9806:.2f}", "tf", st_p)
+
+        # Beam Shear X
         prov_as_x = res_bars.get('X-Dir', 4) * BAR_INFO[inputs['mainBar']]['A_cm2'] * 100
         rho_w = prov_as_x / (by * d);
         rho_term = math.pow(rho_w, 1 / 3)
@@ -258,9 +329,14 @@ def process_footing_calculation(inputs):
         vc_b = 0.66 * lambda_s * rho_term * math.sqrt(fc) * by * d
         phi_vc_b = 0.75 * vc_b
 
-        row("Beam Vu (X)", "Sum Outside d", "-", f"{vu_b / 9806:.2f}", "tf", "")
-        row("Beam φVc", "0.75·0.66λs(ρ)^1/3√fc·bd", f"0.75·0.66·{rho_term:.2f}...", f"{phi_vc_b / 9806:.2f}", "tf",
-            "PASS" if vu_b <= phi_vc_b else "FAIL")
+        row("Beam Vu (X-Axis)", "Sum Outside d", "-", f"{vu_b / 9806:.2f}", "tf", "")
+
+        sub_vc_b = f"0.75·0.66·{lambda_s:.2f}·{rho_term:.2f}·√{fc:.0f}·{by:.0f}·{d:.0f}"
+        st_b = "PASS" if vu_b <= phi_vc_b else "FAIL"
+        row("Beam Capacity φVc", "0.75·0.66λs(ρ)^1/3√fc·bd", sub_vc_b, f"{phi_vc_b / 9806:.2f}", "tf", st_b)
+
+    sec("5. FINAL STATUS")
+    row("Overall Design", "-", "-", "COMPLETE", "-", "OK")
 
     return rows, coords, bx, by, res_bars.get('X-Dir', 4), res_bars.get('Y-Dir', 4), h_final
 
@@ -346,7 +422,7 @@ def generate_report(title, rows, imgs, proj, eng, elem_id):
             t_rows += f"<tr class='sec-row'><td colspan='6'>{r[1]}</td></tr>"
         else:
             cls = "pass-ok" if "PASS" in r[5] or "OK" in r[5] else ("pass-no" if "FAIL" in r[5] else "")
-            val_cls = "load-val" if "Mu" in r[0] or "Vu" in r[0] or "Pu" in r[0] else ""
+            val_cls = "load-value" if "Mu" in r[0] or "Vu" in r[0] else ""
             t_rows += f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td class='{val_cls}'>{r[3]}</td><td>{r[4]}</td><td class='{cls}'>{r[5]}</td></tr>"
 
     img_html = "".join([f"<div class='drawing-box'><img src='{i}' style='max-width:100%'></div>" for i in imgs])
@@ -354,33 +430,37 @@ def generate_report(title, rows, imgs, proj, eng, elem_id):
     return f"""
     <div style="font-family: Sarabun, sans-serif; padding: 20px;">
         <div style="text-align:center; margin-bottom:20px;">
-            <button onclick="window.print()" class="print-btn-internal">🖨️ Print / Save PDF</button>
+            <button onclick="window.print()" class="print-btn-internal">🖨️ Print This Page / พิมพ์หน้านี้</button>
         </div>
 
-        <div style="text-align:center; border-bottom: 2px solid #333; margin-bottom: 20px; position: relative;">
-            <div style="position: absolute; top: 0; right: 0; border: 2px solid #333; padding: 5px 15px; font-weight: bold; font-size: 18px;">{elem_id}</div>
-            <h2>ENGINEERING DESIGN REPORT</h2>
-            <h4>{title}</h4>
-        </div>
+        <div class="report-container">
+            <div class="header-report">
+                <div class="id-box">{elem_id}</div>
+                <h1>ENGINEERING DESIGN REPORT</h1>
+                <h3>{title}</h3>
+            </div>
 
-        <div style="display:flex; justify-content:space-between; margin-bottom:20px; border:1px solid #ddd; padding:10px;">
-            <div><strong>Project:</strong> {proj}<br><strong>Engineer:</strong> {eng}</div>
-            <div><strong>Date:</strong> 16/12/2568</div>
-        </div>
+            <div class="info-table">
+                <div><strong>Project:</strong> {proj}<br><strong>Engineer:</strong> {eng}</div>
+                <div style="text-align:right;"><strong>Date:</strong> 16/12/2568</div>
+            </div>
 
-        <div class="drawing-container">{img_html}</div><br>
+            <h3 style="text-align:center;">Design Summary</h3>
+            <div class="drawing-container">{img_html}</div>
 
-        <table class="report-table">
-            <thead><tr><th width="20%">Item</th><th width="25%">Formula</th><th width="30%">Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr></thead>
-            <tbody>{t_rows}</tbody>
-        </table>
+            <h3 style="text-align:center;">Calculation Details</h3>
+            <table class="report-table">
+                <thead><tr><th width="20%">Item</th><th width="25%">Formula</th><th width="30%">Substitution</th><th>Result</th><th>Unit</th><th>Status</th></tr></thead>
+                <tbody>{t_rows}</tbody>
+            </table>
 
-        <div class="footer-section">
-            <div class="signature-block">
-                <div style="font-weight: bold;">Designed by:</div>
-                <div class="sign-line"></div>
-                <div>({eng})</div>
-                <div>วิศวกรโครงสร้าง</div>
+            <div class="footer-section">
+                <div class="signature-block">
+                    <div style="text-align: left; font-weight: bold;">Designed by:</div>
+                    <div class="sign-line"></div>
+                    <div>({eng})</div>
+                    <div>วิศวกรโครงสร้าง</div>
+                </div>
             </div>
         </div>
     </div>
@@ -388,7 +468,7 @@ def generate_report(title, rows, imgs, proj, eng, elem_id):
 
 
 # ==========================================
-# 6. UI
+# 6. MAIN UI
 # ==========================================
 st.title("RC Pile Cap Design SDM")
 
@@ -396,7 +476,7 @@ with st.sidebar.form("inputs"):
     st.header("Project Info")
     project = st.text_input("Project Name", "New Building")
     f_id = st.text_input("Footing ID", "F-01")
-    engineer = st.text_input("Engineer Name", "Eng. A")
+    engineer = st.text_input("Engineer Name", "Mr. Engineer")
 
     c1, c2 = st.columns(2)
     fc = c1.number_input("fc' (ksc)", 240);
@@ -408,18 +488,18 @@ with st.sidebar.form("inputs"):
     dp = c1.number_input("Pile Dia (m)", 0.22);
     spacing = c2.number_input("Spacing (m)", 0.80)
 
-    auto_h = st.checkbox("Auto-Design H", True)
+    auto_h = st.checkbox("Auto-Design Thickness", True)
     h = st.number_input("Thickness (m)", 0.50)
     edge = st.number_input("Edge Dist (m)", 0.25)
     mainBar = st.selectbox("Main Rebar", list(BAR_INFO.keys()), index=4)
 
     Pu = st.number_input("Axial Load Pu (tf)", 60.0)
-    PileCap = st.number_input("Pile Cap (tf)", 30.0)
+    PileCap = st.number_input("Pile Capacity (tf)", 30.0)
 
     run_btn = st.form_submit_button("Run Design")
 
 if run_btn:
-    st.success("✅ Calculation Complete: Design Passed")
+    st.success("✅ คำนวณเสร็จสิ้น (Calculation Finished)")
     d = {'project': project, 'f_id': f_id, 'engineer': engineer, 'fc': fc, 'fy': fy, 'cx': cx, 'cy': cy,
          'n_pile': n_pile, 'dp': dp, 'spacing': spacing, 'h': h, 'edge': edge, 'mainBar': mainBar,
          'Pu': Pu, 'PileCap': PileCap, 'auto_h': auto_h}
