@@ -74,14 +74,11 @@ def check_development_length(inputs, bar_dia_mm, avail_mm):
     fy_mpa = inputs['fy'] * 0.0980665
 
     # 1. Straight Ld (ACI 318-19 Sec 25.4.2)
-    # Assumptions: Bottom bar (psi_t=1.0), Uncoated (psi_e=1.0), Normal wt (lambda=1.0)
     psi_t = 1.0;
     psi_e = 1.0;
     lam = 1.0
 
-    # Size Factor (psi_s)
     if bar_dia_mm <= 19:
-        # Simplified Eq Table 25.4.2.2 (Case 2: Spacing/Cover OK)
         ld_val = (fy_mpa * psi_t * psi_e) / (2.1 * lam * math.sqrt(fc_mpa)) * bar_dia_mm
     else:
         ld_val = (fy_mpa * psi_t * psi_e) / (1.7 * lam * math.sqrt(fc_mpa)) * bar_dia_mm
@@ -89,10 +86,8 @@ def check_development_length(inputs, bar_dia_mm, avail_mm):
     ld_req = max(ld_val, 300.0)
 
     # 2. Hook Ldh (ACI 318-19 Sec 25.4.3)
-    # psi_c (Cover) = 0.7 for Side cover >= 65mm (Footing cover usually 75mm)
     psi_c = 0.7
-    psi_r = 1.0  # Confinement
-
+    psi_r = 1.0
     ldh_val = (0.24 * fy_mpa * psi_e * psi_c * psi_r) / (lam * math.sqrt(fc_mpa)) * bar_dia_mm
     ldh_req = max(ldh_val, 8 * bar_dia_mm, 150.0)
 
@@ -105,9 +100,6 @@ def check_development_length(inputs, bar_dia_mm, avail_mm):
         return ldh_req, "Hook 90°", "FAIL", f"Avail({avail_mm:.0f}) < Ldh({ldh_req:.0f})"
 
 
-# ==========================================
-# 3. CALCULATION LOGIC
-# ==========================================
 def get_pile_coordinates(n_pile, s):
     if n_pile == 1:
         return [(0, 0)]
@@ -123,6 +115,9 @@ def get_pile_coordinates(n_pile, s):
 
 
 def check_shear_capacity_silent(h_trial, inputs, coords, width_x, width_y):
+    """
+    ฟังก์ชันตรวจสอบแรงเฉือนแบบเงียบ (ใช้สำหรับ Loop หาความหนาอัตโนมัติ)
+    """
     fc = inputs['fc'] * 0.0980665
     Pu_tf = inputs['Pu']
     n_pile = int(inputs['n_pile'])
@@ -138,15 +133,16 @@ def check_shear_capacity_silent(h_trial, inputs, coords, width_x, width_y):
     P_avg_N = (Pu_tf * 9806.65) / n_pile if n_pile > 0 else 0
     phi_v = 0.75
 
-    # Punching Shear
+    # Punching Shear Check
     c1 = col_x + d;
     c2 = col_y + d
     Vu_punch_N = sum([P_avg_N for px, py in coords if (abs(px) > c1 / 2) or (abs(py) > c2 / 2)])
     bo = 2 * (c1 + c2)
+    # Using simplified Vc formula for loop
     Vc_punch_N = 0.33 * math.sqrt(fc) * bo * d
     if Vu_punch_N > phi_v * Vc_punch_N: return False
 
-    # Beam Shear
+    # Beam Shear Check (Simplified: Check only one direction for Auto H)
     dist_crit = col_x / 2 + d
     Vu_beam_N = sum([P_avg_N for px, py in coords if abs(px) > dist_crit])
     Vc_beam_N = 0.17 * math.sqrt(fc) * width_y * d
@@ -155,48 +151,66 @@ def check_shear_capacity_silent(h_trial, inputs, coords, width_x, width_y):
     return True
 
 
+# ==========================================
+# 3. MAIN CALCULATION LOGIC (UPDATED)
+# ==========================================
 def process_footing_calculation(inputs):
     rows = []
 
-    # Format: [Item, Formula, Substitution, Result, Unit, Status]
+    # Helper functions for report formatting
     def sec(t):
         rows.append(["SECTION", t, "", "", "", ""])
 
     def row(i, f, s, r, u, st=""):
         rows.append([i, f, s, r, u, st])
 
-    fc = inputs['fc'] * 0.0980665;
-    fy = inputs['fy'] * 0.0980665
-    pu_tf = inputs['Pu'];
+    # 1. Prepare Variables
+    fc = inputs['fc'] * 0.0980665  # ksc -> MPa
+    fy = inputs['fy'] * 0.0980665  # ksc -> MPa
+    pu_tf = inputs['Pu']
     n_pile = int(inputs['n_pile'])
-    s = inputs['spacing'] * 1000;
+    s_m = inputs['spacing']
+    s = s_m * 1000
     edge = inputs['edge'] * 1000
-    dp = inputs['dp'] * 1000;
-    col_x = inputs['cx'] * 1000;
+    dp = inputs['dp'] * 1000
+    col_x = inputs['cx'] * 1000
     col_y = inputs['cy'] * 1000
-    h_final = inputs['h'] * 1000;
+    h_final = inputs['h'] * 1000
     cover = 75.0
-    db = BAR_INFO[inputs['mainBar']]['d_mm']
+    bar_key = inputs['mainBar']
+    db = BAR_INFO[bar_key]['d_mm']
 
-    # Auto H Logic
+    # Auto H Logic (Simple loop)
     coords = get_pile_coordinates(n_pile, s)
-    bx = (max([abs(x) for x, _ in coords]) * 2) + dp + 2 * edge if n_pile > 1 else dp + 2 * edge
-    by = (max([abs(y) for _, y in coords]) * 2) + dp + 2 * edge if n_pile > 1 else dp + 2 * edge
 
+    # Determine Footing Size (bx, by)
+    if n_pile == 1:
+        bx = dp + 2 * edge
+        by = dp + 2 * edge
+    else:
+        max_x = max([abs(x) for x, _ in coords])
+        max_y = max([abs(y) for _, y in coords])
+        bx = (max_x * 2) + dp + 2 * edge
+        by = (max_y * 2) + dp + 2 * edge
+
+    # Auto H Adjustment
     if inputs.get('auto_h', False) and n_pile > 1:
         h_try = 300.0
         for _ in range(50):
             if check_shear_capacity_silent(h_try, inputs, coords, bx, by):
-                h_final = h_try;
+                h_final = h_try
                 break
             h_try += 50.0
 
+    # Effective Depth
     d = h_final - cover - db
 
     # --- 1. GEOMETRY ---
     sec("1. GEOMETRY & PROPERTIES")
     row("Footing Size", "B x L", f"{bx:.0f}x{by:.0f}", f"h={h_final:.0f}", "mm", "")
     row("Effective Depth", "d = h - cover - db", f"{h_final:.0f} - {cover} - {db}", f"{d:.1f}", "mm", "")
+
+    # ACI 318-19 Size Effect Factor (Lambda_s)
     lambda_s = min(math.sqrt(2 / (1 + 0.004 * d)), 1.0)
     row("Size Effect λs", "√(2/(1+0.004d))", f"√(2/(1+0.004*{d:.0f}))", f"{lambda_s:.3f}", "-", "≤1.0")
 
@@ -208,77 +222,129 @@ def process_footing_calculation(inputs):
 
     # --- 3. FLEXURAL ---
     sec("3. FLEXURAL DESIGN")
-    p_n = p_avg * 9806;
-    mx = 0;
-    my = 0
+    p_n_newton = p_avg * 9806.65  # Convert ton to Newton for calculation
+
+    # Calculate Moments
+    mx_newton_mm = 0  # Moment around X-axis (Check Y direction bars)
+    my_newton_mm = 0  # Moment around Y-axis (Check X direction bars)
+
     for x, y in coords:
-        lx = abs(x) - col_x / 2;
+        lx = abs(x) - col_x / 2
         ly = abs(y) - col_y / 2
-        if lx > 0: mx += p_n * lx
-        if ly > 0: my += p_n * ly
+        if lx > 0: my_newton_mm += p_n_newton * lx  # Force * Arm X
+        if ly > 0: mx_newton_mm += p_n_newton * ly  # Force * Arm Y
 
     res_bars = {}
-    for label, mom, width in [('X-Dir', mx, by), ('Y-Dir', my, bx)]:
+
+    # Loop for X-Direction Bars (Moment My) and Y-Direction Bars (Moment Mx)
+    # Note: X-Dir bars resist Moment around Y-axis (My)
+    # Note: Y-Dir bars resist Moment around X-axis (Mx)
+
+    design_params = [
+        {'label': 'X-Dir (M around Y)', 'mom': my_newton_mm, 'width': by, 'key': 'X-Dir'},
+        {'label': 'Y-Dir (M around X)', 'mom': mx_newton_mm, 'width': bx, 'key': 'Y-Dir'}
+    ]
+
+    for param in design_params:
+        mom = param['mom']
+        width = param['width']
+        label = param['label']
+
+        # Design As
         req_as = mom / (0.9 * fy * 0.9 * d) if mom > 0 else 0
-        min_as = 0.0018 * width * h_final
+        min_as = 0.0018 * width * h_final  # Temp & Shrinkage
         des_as = max(req_as, min_as)
-        n = math.ceil(des_as / (BAR_INFO[inputs['mainBar']]['A_cm2'] * 100))
-        if n_pile == 1: n = max(n, 4)
-        prov_as = n * BAR_INFO[inputs['mainBar']]['A_cm2'] * 100
 
-        sub_mu = f"Sum(P * Lever)"
-        sub_as = f"Max({req_as:.0f}, {min_as:.0f})"
+        bar_area_mm2 = BAR_INFO[inputs['mainBar']]['A_cm2'] * 100
+        n_bars = math.ceil(des_as / bar_area_mm2)
+        if n_pile == 1: n_bars = max(n_bars, 4)  # Minimum for single pile cap
 
-        row(f"Moment {label}", "Σ P(arm)", sub_mu, f"{mom / 9.8e6:.2f}", "tf-m", "")
-        row(f"As,req {label}", "Max(Calc, Min)", sub_as, f"{des_as:.0f}", "mm²", "")
-        row(f"Provide {label}", f"{n}-{inputs['mainBar']}", f"As={prov_as:.0f}", "OK", "-", "OK")
+        prov_as = n_bars * bar_area_mm2
 
-        res_bars[label] = n
+        # Add to Report
+        row(f"Moment {label}", "Σ P(arm)", "-", f"{mom / 9.80665e7:.2f}", "tf-m", "")  # N-mm to tf-m
+        row(f"As Req {label}", "Max(Calc, Min)", f"Max({req_as:.0f}, {min_as:.0f})", f"{des_as:.0f}", "mm²", "")
+        row(f"Provide {label}", f"{n_bars}-{inputs['mainBar']}", f"As={prov_as:.0f}", "OK", "-", "OK")
 
-    # --- 4. SHEAR ---
+        res_bars[param['key']] = n_bars
+
+    # --- 4. SHEAR CHECKS (ACI 318-19) ---
     if n_pile > 1:
-        sec("4. SHEAR CHECKS (ACI 318-19)")
+        phi_shear = 0.75
 
-        # Punching
-        bo = 4 * (col_x + d)
-        if n_pile == 2: bo = 2 * (col_x + d) + 2 * (col_y + d)
+        # 4.1 One-Way Shear (X-Axis Analysis -> Critical Section cuts Y-Axis)
+        # Critical section at d from face of column
+        sec("4.1 ONE-WAY SHEAR (CRITICAL SECTION Y)")
+        dist_crit_y = (col_y / 2) + d
 
-        vu_p = sum([p_n for x, y in coords if max(abs(x), abs(y)) > (max(col_x, col_y) + d) / 2])
-        vc_p = 0.33 * lambda_s * math.sqrt(fc) * bo * d
-        phi_vc_p = 0.75 * vc_p
+        # Sum piles outside critical section in Y direction
+        n_piles_shear_y = sum([1 for _, y in coords if abs(y) > dist_crit_y])
+        vu_y_newton = n_piles_shear_y * p_n_newton
 
-        sub_vc_p = f"0.75·0.33·{lambda_s:.2f}·√{fc:.0f}·{bo:.0f}·{d:.0f}"
-        st_p = "PASS" if vu_p <= phi_vc_p else "FAIL"
+        # Vc Capacity (Simplified ACI 318-19: 0.17 * lambda * sqrt(fc) * bw * d)
+        # bw here is bx (width perpendicular to shear force)
+        vc_y_newton = 0.17 * lambda_s * math.sqrt(fc) * bx * d
+        phi_vc_y = phi_shear * vc_y_newton
 
-        row("Punching Vu", "Sum Outside Crit. Sect", "-", f"{vu_p / 9806:.2f}", "tf", "")
-        row("Punching Capacity φVc", "0.75·0.33λs√fc·bo·d", sub_vc_p, f"{phi_vc_p / 9806:.2f}", "tf", st_p)
+        row("Critical Dist (d)", "Cy/2 + d", f"{col_y / 2:.0f} + {d:.0f}", f"{dist_crit_y:.0f}", "mm", "")
+        row("Vu (One-Way Y)", "Σ P_out", f"{n_piles_shear_y} Piles", f"{vu_y_newton / 9806.65:.2f}", "tf", "")
+        row("Capacity φVc", "0.75·0.17λs√fc·B·d", f"0.75·0.17·{lambda_s:.2f}·√{fc:.0f}·{bx:.0f}·{d:.0f}",
+            f"{phi_vc_y / 9806.65:.2f}", "tf",
+            "PASS" if vu_y_newton <= phi_vc_y else "FAIL")
 
-        # Beam Shear X
-        prov_as_x = res_bars.get('X-Dir', 4) * BAR_INFO[inputs['mainBar']]['A_cm2'] * 100
-        rho_w = prov_as_x / (by * d);
-        rho_term = math.pow(rho_w, 1 / 3)
-        vu_b = sum([p_n for x, y in coords if abs(x) > col_x / 2 + d])
-        vc_b = 0.66 * lambda_s * rho_term * math.sqrt(fc) * by * d
-        phi_vc_b = 0.75 * vc_b
+        # 4.2 One-Way Shear (Y-Axis Analysis -> Critical Section cuts X-Axis)
+        sec("4.2 ONE-WAY SHEAR (CRITICAL SECTION X)")
+        dist_crit_x = (col_x / 2) + d
 
-        sub_vc_b = f"0.75·0.66·{lambda_s:.2f}·{rho_term:.2f}·√{fc:.0f}·{by:.0f}·{d:.0f}"
-        st_b = "PASS" if vu_b <= phi_vc_b else "FAIL"
+        # Sum piles outside critical section in X direction
+        n_piles_shear_x = sum([1 for x, _ in coords if abs(x) > dist_crit_x])
+        vu_x_newton = n_piles_shear_x * p_n_newton
 
-        row("Beam Vu (X-Axis)", "Sum Outside d", "-", f"{vu_b / 9806:.2f}", "tf", "")
-        row("Beam Capacity φVc", "0.75·0.66λs(ρ)^1/3√fc·bd", sub_vc_b, f"{phi_vc_b / 9806:.2f}", "tf", st_b)
+        # bw here is by
+        vc_x_newton = 0.17 * lambda_s * math.sqrt(fc) * by * d
+        phi_vc_x = phi_shear * vc_x_newton
 
-    # --- 5. DETAILING CHECK (Development Length) ---
+        row("Critical Dist (d)", "Cx/2 + d", f"{col_x / 2:.0f} + {d:.0f}", f"{dist_crit_x:.0f}", "mm", "")
+        row("Vu (One-Way X)", "Σ P_out", f"{n_piles_shear_x} Piles", f"{vu_x_newton / 9806.65:.2f}", "tf", "")
+        row("Capacity φVc", "0.75·0.17λs√fc·B·d", f"0.75·0.17·{lambda_s:.2f}·√{fc:.0f}·{by:.0f}·{d:.0f}",
+            f"{phi_vc_x / 9806.65:.2f}", "tf",
+            "PASS" if vu_x_newton <= phi_vc_x else "FAIL")
+
+        # 4.3 Two-Way Shear (Punching)
+        sec("4.3 TWO-WAY SHEAR (PUNCHING)")
+
+        # Critical Perimeter (bo) at d/2
+        c1 = col_x + d
+        c2 = col_y + d
+
+        # Handle special case where pile cap is small relative to d/2
+        # But for general rect column:
+        bo = 2 * (c1 + c2)
+
+        # Sum loads outside critical perimeter
+        # Check if pile center is outside (Load is outside if center is outside per simplified assumption)
+        vu_punch_newton = sum([p_n_newton for px, py in coords if (abs(px) > c1 / 2) or (abs(py) > c2 / 2)])
+
+        # Vc Punching (ACI 318-19 Table 22.6.5.2)
+        # Using minimum of 3 equations, usually 0.33 limit controls for stocky members
+        # Vc = 0.33 * lambda_s * sqrt(fc) * bo * d
+        vc_punch_newton = 0.33 * lambda_s * math.sqrt(fc) * bo * d
+        phi_vc_punch = phi_shear * vc_punch_newton
+
+        row("Critical Perim (bo)", "2(c1+d + c2+d)", f"2({c1:.0f}+{c2:.0f})", f"{bo:.0f}", "mm", "")
+        row("Vu (Punching)", "Σ P_out", "-", f"{vu_punch_newton / 9806.65:.2f}", "tf", "")
+        row("Capacity φVc", "0.75·0.33λs√fc·bo·d", f"0.75·0.33·{lambda_s:.2f}·√{fc:.0f}·{bo:.0f}·{d:.0f}",
+            f"{phi_vc_punch / 9806.65:.2f}", "tf",
+            "PASS" if vu_punch_newton <= phi_vc_punch else "FAIL")
+
+    # --- 5. DETAILING CHECK ---
     sec("5. DETAILING CHECK (ACI 318-19)")
-
-    # Calculate Available Length
     avail_x = (bx / 2) - (col_x / 2) - cover
     avail_y = (by / 2) - (col_y / 2) - cover
 
-    # Check X-Direction
     req_len_x, type_x, stat_x, info_x = check_development_length(inputs, db, avail_x)
     row("Dev. Length (X-Dir)", f"Avail: {avail_x:.0f} mm", info_x, f"{req_len_x:.0f} ({type_x})", "mm", stat_x)
 
-    # Check Y-Direction
     req_len_y, type_y, stat_y, info_y = check_development_length(inputs, db, avail_y)
     row("Dev. Length (Y-Dir)", f"Avail: {avail_y:.0f} mm", info_y, f"{req_len_y:.0f} ({type_y})", "mm", stat_y)
 
@@ -366,23 +432,23 @@ def generate_report_html(title, rows, imgs, proj, eng, elem_id, inputs):
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
         body { font-family: 'Sarabun', sans-serif; color: #000; }
-        .print-btn {
-            background-color: #4CAF50; border: none; color: white; padding: 10px 24px;
-            text-align: center; text-decoration: none; display: inline-block;
+        .print-btn { 
+            background-color: #4CAF50; border: none; color: white; padding: 10px 24px; 
+            text-align: center; text-decoration: none; display: inline-block; 
             font-size: 16px; margin: 10px 2px; cursor: pointer; border-radius: 4px; font-weight: bold;
         }
         .print-btn:hover { background-color: #45a049; }
-        .report-container {
-            width: 210mm; min-height: 297mm; padding: 20mm; margin: 10mm auto;
-            border: 1px solid #d3d3d3; border-radius: 5px; background: white;
-            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+        .report-container { 
+            width: 210mm; min-height: 297mm; padding: 20mm; margin: 10mm auto; 
+            border: 1px solid #d3d3d3; border-radius: 5px; background: white; 
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1); 
         }
         .header { text-align: center; margin-bottom: 20px; position: relative; }
         .header h1 { margin: 0; font-size: 24px; font-weight: bold; text-transform: uppercase; }
         .header h2 { margin: 5px 0 0 0; font-size: 18px; font-weight: bold; color: #333; }
         .id-box { position: absolute; top: 0; right: 0; border: 2px solid #000; padding: 5px 10px; font-weight: bold; font-size: 16px; }
-        .info-box {
-            border: 1px solid #ccc; padding: 15px; margin-bottom: 20px;
+        .info-box { 
+            border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; 
             display: flex; justify-content: space-between; background-color: #f9f9f9; font-size: 14px;
         }
         .info-col { width: 48%; }
@@ -520,7 +586,6 @@ with st.sidebar.form("inputs"):
     edge = st.number_input("Edge Dist (m)", 0.25)
     mainBar = st.selectbox("Main Rebar", list(BAR_INFO.keys()), index=4)
 
-    # แก้ไขตรงนี้: เพิ่ม min_value=0.0 เพื่อให้ใส่ค่าตั้งแต่ 0 ได้
     Pu = st.number_input("Axial Load Pu (tf)", min_value=0.0, value=60.0, step=1.0)
     PileCap = st.number_input("Pile Capacity (tf)", min_value=0.0, value=30.0, step=1.0)
 
@@ -528,11 +593,15 @@ with st.sidebar.form("inputs"):
 
 if run_btn:
     st.success("✅ คำนวณเสร็จสิ้น (Calculation Finished)")
-    d_inputs = {'project': project, 'f_id': f_id, 'engineer': engineer, 'fc': fc, 'fy': fy, 'cx': cx, 'cy': cy,
-                'n_pile': n_pile, 'dp': dp, 'spacing': spacing, 'h': h, 'edge': edge, 'mainBar': mainBar,
-                'Pu': Pu, 'PileCap': PileCap, 'auto_h': auto_h}
+    d_inputs = {
+        'project': project, 'f_id': f_id, 'engineer': engineer,
+        'fc': fc, 'fy': fy, 'cx': cx, 'cy': cy,
+        'n_pile': n_pile, 'dp': dp, 'spacing': spacing,
+        'h': h, 'edge': edge, 'mainBar': mainBar,
+        'Pu': Pu, 'PileCap': PileCap, 'auto_h': auto_h
+    }
 
-    # 1. Calculate
+    # 1. Calculate (Uses Updated Function)
     rows, coords, bx, by, nx, ny, h_calc = process_footing_calculation(d_inputs)
     d_inputs['h'] = fmt(h_calc / 1000)  # Update H for report
 
