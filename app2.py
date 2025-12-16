@@ -283,11 +283,8 @@ def process_footing_calculation(inputs):
     row("Dev. Length (Y-Dir)", f"Avail: {avail_y:.0f} mm", info_y, f"{req_len_y:.0f} ({type_y})", "mm", stat_y)
 
     sec("6. FINAL STATUS")
-    # ตรวจสอบว่ามีบรรทัดไหนที่ไม่ผ่านหรือไม่
     final_st = "OK" if "FAIL" not in [r[5] for r in rows] else "CHECK"
-    # ถ้าผ่านหมด ให้แสดง "DESIGN COMPLETE" ถ้าไม่ผ่านให้แสดง "CALCULATION DONE" (หรือข้อความอื่นเพื่อเตือน)
     final_msg = "DESIGN COMPLETE" if final_st == "OK" else "CALCULATION DONE"
-
     row("Overall Design", "-", "-", final_msg, "-", final_st)
 
     return rows, coords, bx, by, res_bars.get('X-Dir', 4), res_bars.get('Y-Dir', 4), h_final
@@ -523,8 +520,9 @@ with st.sidebar.form("inputs"):
     edge = st.number_input("Edge Dist (m)", 0.25)
     mainBar = st.selectbox("Main Rebar", list(BAR_INFO.keys()), index=4)
 
-    Pu = st.number_input("Axial Load Pu (tf)", 60.0)
-    PileCap = st.number_input("Pile Capacity (tf)", 30.0)
+    # แก้ไขตรงนี้: เพิ่ม min_value=0.0 เพื่อให้ใส่ค่าตั้งแต่ 0 ได้
+    Pu = st.number_input("Axial Load Pu (tf)", min_value=0.0, value=60.0, step=1.0)
+    PileCap = st.number_input("Pile Capacity (tf)", min_value=0.0, value=30.0, step=1.0)
 
     run_btn = st.form_submit_button("Run Design")
 
