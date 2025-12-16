@@ -15,14 +15,24 @@ import streamlit.components.v1 as components
 # ==========================================
 st.set_page_config(page_title="RC Pile Cap Design (ACI 318-19)", layout="wide")
 
-# CSS สำหรับตกแต่งหน้าตาหลักของ Streamlit (ส่วน Input)
+# CSS สำหรับปรับแต่งหน้าจอหลักและซ่อน Elements เวลาสั่งพิมพ์
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');
+
     .stApp {
         font-family: 'Sarabun', sans-serif;
     }
     h1, h2, h3 {
         font-family: 'Sarabun', sans-serif;
+    }
+
+    /* ซ่อน Header และ Sidebar ของ Streamlit เมื่อสั่งพิมพ์ */
+    @media print {
+        [data-testid="stHeader"] { display: none !important; }
+        [data-testid="stSidebar"] { display: none !important; }
+        .block-container { padding: 0 !important; max-width: 100% !important; }
+        footer { display: none !important; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -41,6 +51,15 @@ BAR_INFO = {
     'DB28': {'A_cm2': 6.158, 'd_mm': 28},
     'DB32': {'A_cm2': 8.042, 'd_mm': 32}
 }
+
+
+# --- เพิ่มฟังก์ชัน fmt ที่ขาดหายไป ---
+def fmt(n, digits=2):
+    try:
+        val = float(n)
+        return f"{val:,.{digits}f}"
+    except:
+        return str(n)
 
 
 def fig_to_base64(fig):
@@ -455,7 +474,7 @@ def generate_report_html(title, rows, imgs, proj, eng, elem_id, inputs):
                     <div>({eng})</div>
                     <div>Structural Engineer</div>
                 </div>
-                </div>
+            </div>
         </div>
     </body>
     </html>
@@ -504,7 +523,7 @@ if run_btn:
 
     # 1. Calculate
     rows, coords, bx, by, nx, ny, h_calc = process_footing_calculation(d_inputs)
-    d_inputs['h'] = fmt(h_calc / 1000)  # Update H for report
+    d_inputs['h'] = fmt(h_calc / 1000)  # Update H for report using fmt
 
     # 2. Plot
     img_b64 = fig_to_base64(plot_foot_combined(coords, bx, by, nx, ny, mainBar, h_calc, cx * 1000, cy * 1000))
